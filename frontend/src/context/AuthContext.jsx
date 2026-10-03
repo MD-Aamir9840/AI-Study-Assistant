@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useState } from "react";
 import { loginOrRegister } from "../api/client";
 
 const AuthContext = createContext();
@@ -15,8 +15,12 @@ export function AuthProvider({ children }) {
 
   const login = async (email, password, name = null, course = null) => {
     // Password is not used yet (no real auth backend) — kept for UX only.
-    // In a real app you'd hash and verify. For now, this is a demo login.
-    const res = await loginOrRegister(email, name, course);
+    // The backend expects: { email, name?, course? }
+    const payload = { email };
+    if (name) payload.name = name;
+    if (course) payload.course = course;
+
+    const res = await loginOrRegister(payload);   // ✅ FIXED
 
     const userData = {
       student_id: res.data.student_id,
