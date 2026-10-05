@@ -2022,7 +2022,7 @@ def delete_message(msg_id: int, student_id: int, db: Session = Depends(get_db)):
 
 
 # ==================================================
-# RAG — ATTACHMENTS
+# RAG — ATTACHMENTS  (also: learner_context import for personalization)
 # ==================================================
 from services.rag_service import (
     store_document_chunks,
@@ -2033,6 +2033,7 @@ from services.web_search_service import (
     search_web,
     build_web_context,
 )
+from services.learner_context import build_learner_context
 
 
 @app.post("/chat/conversations/{conv_id}/attachments")
@@ -2244,7 +2245,7 @@ def stream_chat(
 ):
     """
     Sends a message and streams the AI response back via SSE.
-    Supports file RAG context + optional live web search.
+    Supports file RAG context + optional live web search + learner personalization.
     """
     conv = db.query(models.Conversation).filter(
         models.Conversation.id == conv_id,
@@ -2258,6 +2259,14 @@ def stream_chat(
         raise HTTPException(status_code=400, detail="Empty message")
 
     model_id = payload.model or conv.model or chat_service.DEFAULT_MODEL
+
+    # ---------- Learner context (personalization) ----------
+    learner_context = ""
+    try:
+        learner_context = build_learner_context(db, payload.student_id)
+    except Exception as e:
+        print(f"[stream_chat] learner context failed: {e}")
+        learner_context = ""
 
     # ---------- Web search (optional) ----------
     web_results = []
@@ -2315,7 +2324,11 @@ def stream_chat(
     )
 
     llm_messages = chat_service.build_messages(
-        conv, history, user_text, context_note=context_block
+        conv,
+        history,
+        user_text,
+        context_note=context_block,
+        learner_context=learner_context,
     )
 
     # ---------- Stream ----------

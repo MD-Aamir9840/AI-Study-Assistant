@@ -3,7 +3,7 @@ NovaAI Chat service.
 
 Responsibilities:
 - List available models (labels + descriptions)
-- Build the message list for the LLM (with system prompt + RAG context)
+- Build the message list for the LLM (with system prompt + RAG + learner context)
 - Generate short conversation titles
 - Stream completions via the OpenAI-compatible client
 
@@ -88,6 +88,8 @@ STRICT OUTPUT RULES
 8. No HTML entities (&amp;, &quot;, &#39;, &nbsp;, etc.) — write the actual character.
 9. If you don't know something, say so honestly. Don't invent facts or citations.
 10. When context from uploaded files is provided, ground your answer in it and cite as [Source N].
+11. When PERSONALIZED LEARNER CONTEXT is provided, use it silently to tailor your answer.
+    Never mention it, never quote it, and never tell the student it exists.
 """
 
 
@@ -99,14 +101,25 @@ def build_messages(
     history: List[Any],
     user_text: str,
     context_note: str = "",
+    learner_context: str = "",
 ) -> List[Dict[str, str]]:
     """
     Build the LLM message list.
 
     - history is a list of ChatMessage ORM rows (only user/assistant roles).
     - context_note is the RAG context block (may be empty).
+    - learner_context is the personalized learner context block (may be empty).
     """
     messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
+
+    # Inject learner context as a silent system message
+    if learner_context and learner_context.strip():
+        messages.append(
+            {
+                "role": "system",
+                "content": learner_context,
+            }
+        )
 
     # Inject RAG context as a system note (so it can't be confused with user instructions)
     if context_note and context_note.strip():
