@@ -36,7 +36,14 @@ export default function Login() {
     setError("");
 
     try {
-      await login(email, password);
+      const userData = await login(email, password);
+
+      // Phase 2 — send new users to onboarding first
+      if (userData && !userData.onboarding_completed) {
+        navigate("/onboarding");
+        return;
+      }
+
       // Check for redirect param
       const params = new URLSearchParams(window.location.search);
       const redirect = params.get("redirect");

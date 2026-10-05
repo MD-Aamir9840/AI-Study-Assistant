@@ -94,6 +94,10 @@ def login_or_register(payload: LoginRequest, db: Session = Depends(get_db)):
         "github": student.github or "",
         "linkedin": student.linkedin or "",
         "preferred_language": student.preferred_language or "en",
+        "onboarding_completed": bool(student.onboarding_completed),
+        "learning_goal": student.learning_goal or "",
+        "daily_time_minutes": student.daily_time_minutes or 30,
+        "current_level": student.current_level or "",
         "created": created,
     }
 
@@ -2450,3 +2454,83 @@ def stream_chat(
             "Connection": "keep-alive",
         },
     )
+# ==================================================
+# PHASE 2 — ONBOARDING + DIAGNOSTIC QUIZ
+# ==================================================
+from services.onboarding_service import (
+    start_onboarding,
+    generate_diagnostic,
+    submit_diagnostic,
+)
+
+
+class OnboardingStartRequest(BaseModel):
+    student_id: int
+    learning_goal: str
+    daily_time_minutes: int = 30
+    current_level: str = "beginner"
+
+
+class DiagnosticGenerateRequest(BaseModel):
+    student_id: int
+
+
+class DiagnosticSubmitRequest(BaseModel):
+    student_id: int
+    topic_id: int
+    answers: Dict[str, Optional[str]]
+    session_id: Optional[str] = None
+
+
+@app.post("/onboarding/start")
+def onboarding_start(payload: OnboardingStartRequest, db: Session = Depends(get_db)):
+    try:
+        return start_onboarding(
+            student_id=payload.student_id,
+            learning_goal=payload.learning_goal,
+            daily_time_minutes=payload.daily_time_minutes,
+            current_level=payload.current_level,
+            db=db,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/onboarding/diagnostic/generate")
+def onboarding_generate(
+    payload: DiagnosticGenerateRequest, db: Session = Depends(get_db)
+):
+    try:
+        return generate_diagnostic(student_id=payload.student_id, db=db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/onboarding/diagnostic/submit")
+def onboarding_submit(
+    payload: DiagnosticSubmitRequest, db: Session = Depends(get_db)
+):
+    try:
+        return submit_diagnostic(
+            student_id=payload.student_id,
+            topic_id=payload.topic_id,
+            answers=payload.answers,
+            session_id=payload.session_id,
+            db=db,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/onboarding/status/{student_id}")
+def onboarding_status(student_id: int, db: Session = Depends(get_db)):
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    return {
+        "student_id": student.id,
+        "onboarding_completed": bool(student.onboarding_completed),
+        "learning_goal": student.learning_goal or "",
+        "daily_time_minutes": student.daily_time_minutes or 30,
+        "current_level": student.current_level or "",
+    }

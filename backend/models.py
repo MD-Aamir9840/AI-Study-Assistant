@@ -1,4 +1,4 @@
-from datetime import datetime  
+from datetime import datetime
 from sqlalchemy import (
     Column, Integer, String, Float, Boolean, DateTime, Text, ForeignKey, JSON
 )
@@ -8,7 +8,7 @@ from database import Base
 
 
 # ==================================================
-# STUDENT (extended profile)
+# STUDENT (extended profile + onboarding)
 # ==================================================
 class Student(Base):
     __tablename__ = "students"
@@ -27,7 +27,13 @@ class Student(Base):
     website = Column(String, default="")
     github = Column(String, default="")
     linkedin = Column(String, default="")
-    preferred_language = Column(String, default="en")   # ISO code: en, hi, es, fr, etc.
+    preferred_language = Column(String, default="en")
+
+    # Phase 2 — Onboarding
+    onboarding_completed = Column(Boolean, default=False)
+    learning_goal = Column(String, default="")
+    daily_time_minutes = Column(Integer, default=30)
+    current_level = Column(String, default="")
 
     subjects = relationship(
         "Subject", back_populates="student", cascade="all, delete-orphan"
@@ -365,7 +371,7 @@ class FlashcardSet(Base):
     topic_id = Column(
         Integer, ForeignKey("topics.id"), nullable=False, unique=True, index=True
     )
-    cards_json = Column(Text, nullable=False)  # JSON list of {front, back}
+    cards_json = Column(Text, nullable=False)
     model_version = Column(String, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -410,10 +416,10 @@ class ChatMessage(Base):
     conversation_id = Column(
         Integer, ForeignKey("conversations.id"), nullable=False, index=True
     )
-    role = Column(String, nullable=False)  # "user" | "assistant" | "system"
+    role = Column(String, nullable=False)
     content = Column(Text, nullable=False, default="")
     model = Column(String, default="")
-    feedback = Column(String, default="")   # "" | "up" | "down"
+    feedback = Column(String, default="")
     metadata_json = Column(Text, default="{}")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
@@ -457,5 +463,4 @@ class DocumentChunk(Base):
     embedding = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # ✅ THE MISSING LINE — this was causing the error
     attachment = relationship("ChatAttachment", back_populates="chunks")

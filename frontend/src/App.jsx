@@ -16,6 +16,7 @@ import KnowledgeGaps from "./pages/KnowledgeGaps";
 import Recommendations from "./pages/Recommendations";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
+import Onboarding from "./pages/Onboarding";
 
 function AppRoutes() {
   const { user } = useAuth();
@@ -29,12 +30,22 @@ function AppRoutes() {
         element={user ? <Navigate to="/" replace /> : <Login />}
       />
 
-      {/* ✅ FULL-SCREEN AI Tutor — NO Layout wrapper */}
+      {/* Full-screen AI Tutor — no Layout wrapper */}
       <Route
         path="/ai-tutor"
         element={
           <ProtectedRoute>
             <AITutor />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Onboarding — full-screen, no Layout */}
+      <Route
+        path="/onboarding"
+        element={
+          <ProtectedRoute>
+            <Onboarding />
           </ProtectedRoute>
         }
       />

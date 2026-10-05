@@ -256,7 +256,15 @@ export const markRecommendationComplete = completeRecommendation;
 
 // Flashcard alias
 export const getFlashcards = generateFlashcards;
-
+// Phase 2 — Onboarding
+export const startOnboarding = (payload) =>
+  api.post("/onboarding/start", payload);
+export const generateDiagnostic = (studentId) =>
+  api.post("/onboarding/diagnostic/generate", { student_id: studentId });
+export const submitDiagnostic = (payload) =>
+  api.post("/onboarding/diagnostic/submit", payload);
+export const getOnboardingStatus = (studentId) =>
+  api.get(`/onboarding/status/${studentId}`);
 // ==================================================
 // NOVAAI CHAT — Streaming (SSE)
 // ==================================================

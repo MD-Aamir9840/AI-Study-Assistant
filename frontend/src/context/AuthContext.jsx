@@ -20,13 +20,17 @@ export function AuthProvider({ children }) {
     if (name) payload.name = name;
     if (course) payload.course = course;
 
-    const res = await loginOrRegister(payload);   // ✅ FIXED
+    const res = await loginOrRegister(payload);
 
     const userData = {
       student_id: res.data.student_id,
       email: res.data.email,
       name: res.data.name,
       course: res.data.course,
+      onboarding_completed: !!res.data.onboarding_completed,
+      learning_goal: res.data.learning_goal || "",
+      daily_time_minutes: res.data.daily_time_minutes || 30,
+      current_level: res.data.current_level || "",
       loginAt: new Date().toISOString(),
     };
 
@@ -40,8 +44,16 @@ export function AuthProvider({ children }) {
     setUser(null);
   };
 
+  const updateUser = (partial) => {
+    setUser((prev) => {
+      const next = { ...(prev || {}), ...partial };
+      localStorage.setItem("user", JSON.stringify(next));
+      return next;
+    });
+  };
+
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, login, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );
