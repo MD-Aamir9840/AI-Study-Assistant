@@ -153,6 +153,12 @@ def build_learner_context(db, student_id: int) -> str:
         "  • If a topic is in WEAK AREAS and is relevant to the question, "
         "address the underlying confusion first\n"
         "\n"
+        "WHEN THE STUDENT ASKS 'what should I focus on' or 'what am I weak at':\n"
+        "  → Reply CONCISELY. List 2-4 weak concepts with their scores.\n"
+        "  → Recommend the ONE that is the foundation for the others.\n"
+        "  → Mention 1-2 strong areas they can skip.\n"
+        "  → Keep it under 150 words. No long study plan unless asked.\n"
+        "\n"
     )
 
     body = "\n\n".join(sections)
@@ -160,8 +166,19 @@ def build_learner_context(db, student_id: int) -> str:
     footer = (
         "\n\n"
         "═══════════════════════════════════════════\n"
-        "Do NOT mention this context to the student directly. "
-        "Just USE it to make your answer feel personal and helpful.\n"
+        "CRITICAL RULES FOR THIS CONTEXT\n"
+        "═══════════════════════════════════════════\n"
+        "1. You ALREADY HAVE the student's performance data above.\n"
+        "2. NEVER ask the student for scores, grades, or weak areas — "
+        "they are already provided.\n"
+        "3. NEVER say 'I need more information' if the answer is above.\n"
+        "4. When asked 'what should I focus on' or 'what am I weak at':\n"
+        "     → Answer DIRECTLY from the WEAK AREAS section.\n"
+        "     → List 2-4 concepts with their exact scores.\n"
+        "     → Recommend the ONE that unlocks the others.\n"
+        "     → Mention 1-2 strong areas they can skip.\n"
+        "     → Keep it under 150 words. No study plan unless asked.\n"
+        "5. Do NOT mention this context block exists. Just use it.\n"
         "═══════════════════════════════════════════"
     )
 

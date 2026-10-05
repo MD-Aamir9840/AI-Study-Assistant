@@ -2176,6 +2176,7 @@ def debug_attachment(attachment_id: int, db: Session = Depends(get_db)):
         .filter(models.ChatAttachment.id == attachment_id)
         .first()
     )
+    
     if not att:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
@@ -2203,6 +2204,16 @@ def debug_attachment(attachment_id: int, db: Session = Depends(get_db)):
             }
             for c in chunks[:10]
         ],
+    }
+@app.get("/chat/debug/learner-context/{student_id}")
+def debug_learner_context(student_id: int, db: Session = Depends(get_db)):
+    """TEMPORARY — inspect the exact learner context sent to the LLM."""
+    from services.learner_context import build_learner_context
+    context = build_learner_context(db, student_id)
+    return {
+        "student_id": student_id,
+        "char_count": len(context),
+        "context": context,
     }
 
 
