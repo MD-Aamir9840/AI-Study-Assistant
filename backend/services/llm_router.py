@@ -1,8 +1,37 @@
 import os
+import time
+import random
 from typing import List, Dict, Any, Iterator
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ==================================================
+# Retry Logic (Exponential Backoff)
+# ==================================================
+def _retry_with_backoff(func, max_retries=4, initial_delay=2.0):
+    """
+    Retries a function if a transient server error occurs (503, 429).
+    """
+    retries = 0
+    while retries < max_retries:
+        try:
+            return func()
+        except Exception as e:
+            error_str = str(e).lower()
+            # Check for transient errors
+            if any(x in error_str for x in ["503", "429", "unavailable", "overloaded", "resource exhausted"]):
+                if retries == max_retries - 1:
+                    raise # Give up after max retries
+                
+                # Calculate delay: 2s, 4s, 8s, 16s + random jitter
+                delay = (initial_delay * (2 ** retries)) + random.uniform(0.5, 1.5)
+                print(f"[LLM Router] Google API overloaded. Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+                retries += 1
+            else:
+                raise # Don't retry client errors (e.g., invalid API key)
+
 
 # ==================================================
 # Model Catalog
@@ -35,14 +64,14 @@ _MODEL_CATALOG = {
         "provider": "anthropic", "real_id": "claude-3-haiku-20240307", "label": "Claude 3 Haiku",
         "description": "Anthropic's fastest model.", "speed": "fast", "capability": "basic",
     },
-    # --- Google (Updated to 2.0/2.5) ---
-    "gemini-2-0-flash": {
-        "provider": "google", "real_id": "gemini-2.0-flash", "label": "Gemini 2.0 Flash",
-        "description": "Google's fast and efficient 2.0 model.", "speed": "fast", "capability": "general",
+    # --- Google (Updated to Stable 3.8) ---
+    "gemini-3-8-flash": {
+        "provider": "google", "real_id": "gemini-3.8-flash", "label": "Gemini 3.8 Flash",
+        "description": "Google's most intelligent and fast model.", "speed": "fast", "capability": "general",
     },
-    "gemini-2-5-flash": {
-        "provider": "google", "real_id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash",
-        "description": "Google's advanced next-gen model.", "speed": "medium", "capability": "advanced",
+    "gemini-3-1-flash-lite": {
+        "provider": "google", "real_id": "gemini-3.1-flash-lite", "label": "Gemini 3.1 Lite",
+        "description": "Google's lightweight, ultra-fast model.", "speed": "fast", "capability": "basic",
     },
 }
 
@@ -50,12 +79,16 @@ _LEGACY_MAP = {
     "nova-fast": "groq-oss-20b",
     "nova-balanced": "groq-oss-120b",
     "nova-reasoning": "groq-oss-120b",
-    "gemini-1-5-pro": "gemini-2-5-flash",   # Redirect old IDs
-    "gemini-1-5-flash": "gemini-2-0-flash", # Redirect old IDs
+    "gemini-1-5-pro": "gemini-3-8-flash",
+    "gemini-1-5-flash": "gemini-3-8-flash",
+    "gemini-2-0-flash": "gemini-3-8-flash",
+    "gemini-2-5-flash": "gemini-3-8-flash",
+    "gemini-3.8-flash": "gemini-3-8-flash",
 }
 
 DEFAULT_MODEL = "groq-oss-120b"
 TITLE_MODEL = "groq-oss-20b"
+
 
 def list_models() -> List[Dict[str, Any]]:
     result = []
@@ -79,6 +112,7 @@ def list_models() -> List[Dict[str, Any]]:
         })
     return result
 
+
 def resolve_model(ui_id: str) -> Dict[str, str]:
     if not ui_id: ui_id = DEFAULT_MODEL
     if ui_id in _LEGACY_MAP: ui_id = _LEGACY_MAP[ui_id]
@@ -87,7 +121,7 @@ def resolve_model(ui_id: str) -> Dict[str, str]:
 
 
 # ==================================================
-# Client Getters (Lazy Loaded)
+# Client Getters
 # ==================================================
 _clients = {}
 
@@ -117,9 +151,10 @@ def _get_anthropic():
 
 def _get_google():
     if "google" not in _clients:
-        from google import genai  # NEW SDK
+        from google import genai
         api_key = os.getenv("GEMINI_API_KEY")
         if not api_key: raise ValueError("GEMINI_API_KEY is missing in .env")
+        # The new SDK automatically handles some retries, but we wrap it anyway
         _clients["google"] = genai.Client(api_key=api_key)
     return _clients["google"]
 
@@ -156,7 +191,6 @@ def stream_completion(ui_id: str, messages: List[Dict[str, str]]) -> Iterator[st
 
         elif provider == "google":
             client = _get_google()
-            # Format history for new Google SDK
             gemini_history = []
             system_msg = ""
             for m in messages:
@@ -167,13 +201,17 @@ def stream_completion(ui_id: str, messages: List[Dict[str, str]]) -> Iterator[st
             if system_msg and gemini_history:
                 gemini_history[0]["parts"][0]["text"] = system_msg + "\n\n" + gemini_history[0]["parts"][0]["text"]
 
-            response = client.models.generate_content_stream(
-                model=real_id,
-                contents=gemini_history,
-            )
+            # Wrap the API call in our retry function
+            def _generate():
+                return client.models.generate_content_stream(
+                    model=real_id,
+                    contents=gemini_history,
+                )
+
+            response = _retry_with_backoff(_generate)
+
             for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+                if chunk.text: yield chunk.text
 
     except Exception as e:
         yield f"\n\n[Error: {e}]"
@@ -198,6 +236,10 @@ def generate_completion(ui_id: str, messages: List[Dict[str, str]], max_tokens: 
     elif provider == "google":
         client = _get_google()
         prompt = "\n".join([m["content"] for m in messages])
-        res = client.models.generate_content(model=real_id, contents=prompt)
+        
+        def _generate():
+            return client.models.generate_content(model=real_id, contents=prompt)
+        
+        res = _retry_with_backoff(_generate)
         return res.text.strip()
     raise ValueError(f"Unknown provider {provider}")

@@ -2209,6 +2209,8 @@ def debug_attachment(attachment_id: int, db: Session = Depends(get_db)):
             for c in chunks[:10]
         ],
     }
+
+
 @app.get("/chat/debug/learner-context/{student_id}")
 def debug_learner_context(student_id: int, db: Session = Depends(get_db)):
     """TEMPORARY — inspect the exact learner context sent to the LLM."""
@@ -2355,7 +2357,6 @@ def stream_chat(
             yield _sse({"type": "user_message_id", "id": user_msg.id})
             yield _sse({"type": "title", "title": conv.title})
 
-            # Emit web sources first (if any)
             if web_results:
                 yield _sse({
                     "type": "web_sources",
@@ -2370,7 +2371,6 @@ def stream_chat(
                     ],
                 })
 
-            # Emit file sources
             if chunks:
                 yield _sse({
                     "type": "sources",
@@ -2385,32 +2385,30 @@ def stream_chat(
                     ],
                 })
 
-            # Stream with a small buffer so HTML tags split across
-            # chunks are still caught and stripped correctly.
             stream_buffer = ""
+            try:
+                for delta in chat_service.stream_completion(model_id, llm_messages):
+                    stream_buffer += delta
 
-            for delta in chat_service.stream_completion(model_id, llm_messages):
-                stream_buffer += delta
+                    last_lt = stream_buffer.rfind("<")
+                    last_gt = stream_buffer.rfind(">")
 
-                # If the buffer ends with an incomplete "<...", hold it back
-                last_lt = stream_buffer.rfind("<")
-                last_gt = stream_buffer.rfind(">")
+                    if last_lt > last_gt:
+                        safe = stream_buffer[:last_lt]
+                        stream_buffer = stream_buffer[last_lt:]
+                    else:
+                        safe = stream_buffer
+                        stream_buffer = ""
 
-                if last_lt > last_gt:
-                    # Incomplete tag at the end — hold it for the next chunk
-                    safe = stream_buffer[:last_lt]
-                    stream_buffer = stream_buffer[last_lt:]
-                else:
-                    safe = stream_buffer
-                    stream_buffer = ""
+                    if safe:
+                        cleaned = _strip_html_streaming(safe)
+                        if cleaned:
+                            full_response += cleaned
+                            yield _sse({"type": "delta", "content": cleaned})
+            except Exception as stream_err:
+                print(f"[stream_chat] LLM stream interrupted: {stream_err}")
+                yield _sse({"type": "error", "message": str(stream_err)})
 
-                if safe:
-                    cleaned = _strip_html_streaming(safe)
-                    if cleaned:
-                        full_response += cleaned
-                        yield _sse({"type": "delta", "content": cleaned})
-
-            # Flush whatever is left in the buffer
             if stream_buffer:
                 cleaned = _strip_html_streaming(stream_buffer)
                 if cleaned:
@@ -2440,6 +2438,9 @@ def stream_chat(
 
             yield _sse({"type": "done", "message_id": assistant_msg_id})
 
+        except GeneratorExit:
+            print("[stream_chat] Client disconnected. Stopping stream.")
+            return
         except Exception as e:
             yield _sse({"type": "error", "message": str(e)})
 
@@ -2454,6 +2455,8 @@ def stream_chat(
             "Connection": "keep-alive",
         },
     )
+
+
 # ==================================================
 # PHASE 2 — ONBOARDING + DIAGNOSTIC QUIZ
 # ==================================================
