@@ -16,6 +16,8 @@ import {
   deleteChatAttachment,
 } from "../api/client";
 import ChatMessageView from "../components/ChatMessageView";
+import ModelSelector from "../components/ModelSelector";
+import PremiumModal from "../components/PremiumModal";
 import useVoiceInput from "../hooks/useVoiceInput";
 import useVoiceOutput from "../hooks/useVoiceOutput";
 import {
@@ -28,8 +30,6 @@ import {
   Pin,
   Send,
   Square,
-  Sparkles,
-  ChevronDown,
   ChevronsLeft,
   PanelLeftOpen,
   Menu,
@@ -51,7 +51,7 @@ import {
 } from "lucide-react";
 import "./AITutor.css";
 
-const DEFAULT_MODEL = "nova-balanced";
+const DEFAULT_MODEL = "groq-oss-120b";
 const SIDEBAR_KEY = "nova_sidebar_collapsed";
 const CONV_CACHE_KEY = "nova_conversations_cache_v2";
 
@@ -68,9 +68,6 @@ export default function AITutor() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // ==================================================
-  // INSTANT CACHE LOAD — read synchronously on init
-  // ==================================================
   const [conversations, setConversations] = useState(() => {
     try {
       const raw = localStorage.getItem(CONV_CACHE_KEY);
@@ -91,6 +88,9 @@ export default function AITutor() {
   const [streaming, setStreaming] = useState(false);
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
+  
+  // Premium Modal State
+  const [premiumModalModel, setPremiumModalModel] = useState(null);
 
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -114,12 +114,10 @@ export default function AITutor() {
   const fileInputRef = useRef(null);
   const hasFetchedRef = useRef(false);
 
-  // Persist sidebar state
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "true" : "false");
   }, [sidebarCollapsed]);
 
-  // Voice
   const voiceInput = useVoiceInput({
     onResult: (text) => {
       setInput((prev) => (prev ? `${prev} ${text}` : text));
@@ -128,19 +126,12 @@ export default function AITutor() {
   });
   const voiceOutput = useVoiceOutput();
 
-  // Load models once
   useEffect(() => {
     getChatModels()
       .then((res) => setModels(res.data.models || []))
       .catch(() => {});
   }, []);
 
-  // ==================================================
-  // Conversation loading strategy
-  // ==================================================
-  // On mount: if cache → show instantly + silent refresh
-  //           if no cache → fetch (show loading)
-  // Not re-triggered on tab switches (uses hasFetchedRef).
   useEffect(() => {
     if (!user?.student_id) return;
     if (hasFetchedRef.current) return;
@@ -156,11 +147,8 @@ export default function AITutor() {
     })();
 
     if (cached?.data?.length) {
-      // Already rendered instantly from cache.
-      // Silent refresh in background.
       loadConversations("", { silent: true });
     } else {
-      // No cache → fetch with spinner
       loadConversations("", { silent: false });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -179,8 +167,6 @@ export default function AITutor() {
       const list = res.data.conversations || [];
       setConversations(list);
 
-      // Persist to cache (only for non-search queries to avoid overwriting
-      // with filtered results)
       if (!q.trim()) {
         try {
           localStorage.setItem(
@@ -194,9 +180,8 @@ export default function AITutor() {
         } catch {}
       }
 
-      setError(""); // clear any stale error on success
+      setError("");
     } catch {
-      // Only show error if we have no cached data to display
       if (conversations.length === 0) {
         setError("Could not load conversations.");
       }
@@ -206,7 +191,6 @@ export default function AITutor() {
     }
   };
 
-  // Search debounce
   useEffect(() => {
     if (!user?.student_id) return;
     if (!searchQuery.trim()) return;
@@ -216,7 +200,6 @@ export default function AITutor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery]);
 
-  // Load attachments for active conversation
   useEffect(() => {
     if (!activeConvId || !user?.student_id) {
       setAttachments([]);
@@ -446,7 +429,6 @@ export default function AITutor() {
     } finally {
       setStreaming(false);
       abortRef.current = null;
-      // Silent refresh — we already have this conversation in memory
       loadConversations(searchQuery, { silent: true });
     }
   };
@@ -597,7 +579,6 @@ export default function AITutor() {
             <X size={18} />
           </button>
 
-          {/* ✅ Panel-style collapse button — matches 3rd image */}
           <button
             type="button"
             className="nova-sidebar-collapse-btn"
@@ -762,7 +743,6 @@ export default function AITutor() {
             <Home size={18} />
           </button>
 
-          {/* ✅ Hamburger swaps to PanelLeftOpen when sidebar is collapsed */}
           <button
             type="button"
             className="nova-icon-btn nova-hamburger"
@@ -777,20 +757,18 @@ export default function AITutor() {
             )}
           </button>
 
-          <div className="nova-model-selector">
-            <Sparkles size={14} />
-            <select
-              value={selectedModel}
-              onChange={(e) => setSelectedModel(e.target.value)}
-            >
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={12} className="nova-chev" />
-          </div>
+          <ModelSelector
+            models={models}
+            selectedModel={selectedModel}
+            onChange={(modelId, isLocked) => {
+              if (isLocked) {
+                const m = models.find((x) => x.id === modelId);
+                setPremiumModalModel(m?.label || "Premium Model");
+              } else {
+                setSelectedModel(modelId);
+              }
+            }}
+          />
 
           <div className="nova-topbar-actions">
             <button
@@ -1003,6 +981,12 @@ export default function AITutor() {
           </p>
         </div>
       </main>
+
+      <PremiumModal 
+        isOpen={!!premiumModalModel} 
+        onClose={() => setPremiumModalModel(null)} 
+        modelName={premiumModalModel} 
+      />
     </div>
   );
 }

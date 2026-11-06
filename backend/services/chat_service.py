@@ -5,65 +5,28 @@ Responsibilities:
 - List available models (labels + descriptions)
 - Build the message list for the LLM (with system prompt + RAG + learner context)
 - Generate short conversation titles
-- Stream completions via the OpenAI-compatible client
-
-Uses the shared client from ai_tutor.get_client().
+- Stream completions via the LLM Router
 """
 
 from typing import List, Dict, Any, Optional, Iterator
 
-from ai_tutor import get_client
+from services import llm_router
 
 
 # ==================================================
-# Model catalog
+# Model catalog (Delegated to Router)
 # ==================================================
-DEFAULT_MODEL = "nova-balanced"
-
-# Map UI model IDs → real LLM model IDs.
-# Adjust the values to whatever provider you use.
-_MODEL_MAP = {
-    "nova-fast": "openai/gpt-oss-20b",
-    "nova-balanced": "openai/gpt-oss-120b",
-    "nova-reasoning": "openai/gpt-oss-120b",
-}
-
-_MODELS = [
-    {
-        "id": "nova-fast",
-        "label": "Nova Fast",
-        "description": "Fastest responses, good for quick questions.",
-        "speed": "fast",
-        "capability": "basic",
-    },
-    {
-        "id": "nova-balanced",
-        "label": "Nova Balanced",
-        "description": "Best balance of speed and quality.",
-        "speed": "medium",
-        "capability": "general",
-    },
-    {
-        "id": "nova-reasoning",
-        "label": "Nova Reasoning",
-        "description": "Stronger reasoning, slower responses.",
-        "speed": "slow",
-        "capability": "advanced",
-    },
-]
-
-TITLE_MODEL = "openai/gpt-oss-20b"
-
+DEFAULT_MODEL = llm_router.DEFAULT_MODEL
+TITLE_MODEL = llm_router.TITLE_MODEL
 
 def list_models() -> List[Dict[str, Any]]:
-    return _MODELS
-
+    return llm_router.list_models()
 
 def resolve_model(model_id: Optional[str]) -> str:
-    """Return the real LLM model ID for a UI model ID."""
+    """Kept for backward compatibility. Returns the UI ID."""
     if not model_id:
-        return _MODEL_MAP[DEFAULT_MODEL]
-    return _MODEL_MAP.get(model_id, _MODEL_MAP[DEFAULT_MODEL])
+        return DEFAULT_MODEL
+    return model_id
 
 
 # ==================================================
@@ -109,47 +72,30 @@ def build_messages(
 ) -> List[Dict[str, str]]:
     """
     Build the LLM message list.
-
-    - history is a list of ChatMessage ORM rows (only user/assistant roles).
-    - context_note is the RAG context block (may be empty).
-    - learner_context is the personalized learner context block (may be empty).
     """
     messages: List[Dict[str, str]] = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     # Inject learner context as a silent system message
     if learner_context and learner_context.strip():
-        messages.append(
-            {
-                "role": "system",
-                "content": learner_context,
-            }
-        )
+        messages.append({"role": "system", "content": learner_context})
 
-    # Inject RAG context as a system note (so it can't be confused with user instructions)
+    # Inject RAG context as a system note
     if context_note and context_note.strip():
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "The user has uploaded files. Here is relevant context:\n\n"
-                    f"{context_note}"
-                ),
-            }
-        )
+        messages.append({
+            "role": "system",
+            "content": "The user has uploaded files. Here is relevant context:\n\n" + context_note
+        })
 
-    # History — most recent N messages to keep prompt size reasonable
+    # History — most recent N messages
     MAX_HISTORY = 20
     trimmed = list(history)[-MAX_HISTORY:] if history else []
 
     for msg in trimmed:
         role = getattr(msg, "role", None)
         content = getattr(msg, "content", None) or ""
-        if role not in ("user", "assistant", "system"):
+        if role not in ("user", "assistant"):
             continue
         if not content.strip():
-            continue
-        # Skip system rows from history (they'd duplicate SYSTEM_PROMPT)
-        if role == "system":
             continue
         messages.append({"role": role, "content": content})
 
@@ -168,34 +114,9 @@ def stream_completion(
     messages: List[Dict[str, str]],
 ) -> Iterator[str]:
     """
-    Yield text chunks from the LLM as they arrive.
-    The caller is responsible for HTML stripping / SSE packaging.
+    Yield text chunks from the LLM Router.
     """
-    client = get_client()
-    real_model = resolve_model(model_id)
-
-    try:
-        stream = client.chat.completions.create(
-            model=real_model,
-            messages=messages,
-            temperature=0.7,
-            max_tokens=4000,
-            stream=True,
-        )
-    except Exception as e:
-        # Surface the error as a single delta so the UI shows something useful.
-        yield f"\n\n[Error: {e}]"
-        return
-
-    for chunk in stream:
-        try:
-            delta = chunk.choices[0].delta
-        except (AttributeError, IndexError):
-            continue
-
-        content = getattr(delta, "content", None)
-        if content:
-            yield content
+    yield from llm_router.stream_completion(model_id, messages)
 
 
 # ==================================================
@@ -203,14 +124,12 @@ def stream_completion(
 # ==================================================
 def generate_title(user_text: str) -> str:
     """
-    Generate a short (<= 60 char) conversation title from the first user message.
-    Falls back to a truncated version of the message on any error.
+    Generate a short conversation title.
     """
     text = (user_text or "").strip()
     if not text:
         return "New chat"
 
-    # Quick local fallback
     fallback = text[:60].strip()
     if fallback and len(text) > 60:
         fallback = fallback.rsplit(" ", 1)[0] + "…"
@@ -226,14 +145,11 @@ def generate_title(user_text: str) -> str:
     )
 
     try:
-        client = get_client()
-        resp = client.chat.completions.create(
-            model=TITLE_MODEL,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=20,
+        title = llm_router.generate_completion(
+            TITLE_MODEL,
+            [{"role": "user", "content": prompt}],
+            max_tokens=20
         )
-        title = (resp.choices[0].message.content or "").strip()
         title = title.strip("\"'`. ").replace("\n", " ")
         if title:
             return title[:80]
@@ -241,25 +157,3 @@ def generate_title(user_text: str) -> str:
         pass
 
     return fallback or "New chat"
-
-
-# ==================================================
-# Non-streaming completion (used by other features)
-# ==================================================
-def complete(
-    model_id: str,
-    messages: List[Dict[str, str]],
-    temperature: float = 0.7,
-    max_tokens: int = 2000,
-) -> str:
-    """One-shot non-streaming completion. Returns the assistant text."""
-    client = get_client()
-    real_model = resolve_model(model_id)
-    resp = client.chat.completions.create(
-        model=real_model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        stream=False,
-    )
-    return (resp.choices[0].message.content or "").strip()
