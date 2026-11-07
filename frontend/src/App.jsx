@@ -17,6 +17,7 @@ import Recommendations from "./pages/Recommendations";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
 import Onboarding from "./pages/Onboarding";
+import Roadmap from "./pages/Roadmap"; // <-- Added
 
 function AppRoutes() {
   const { user } = useAuth();
@@ -60,6 +61,7 @@ function AppRoutes() {
                 <Route path="/" element={<Dashboard />} />
                 <Route path="/search" element={<Search />} />
                 <Route path="/topic/:id" element={<TopicView />} />
+                <Route path="/roadmap/:topicId" element={<Roadmap />} /> {/* <-- Added */}
                 <Route path="/upload" element={<UploadLearn />} />
                 <Route path="/quiz" element={<Quiz />} />
                 <Route path="/flashcards" element={<Flashcards />} />

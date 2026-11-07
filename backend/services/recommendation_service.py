@@ -1,17 +1,11 @@
 """
-Rule-based recommendation engine.
-
-For each concept the student has data on, compute a priority score.
-Higher = more urgent to study. Then generate an actionable recommendation.
+Rule-based recommendation engine. Optimized (no N+1 queries).
 """
 
-from datetime import datetime, timedelta
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 import models
 
-
-# ---------- Priority weights ----------
-W_WEAKNESS = 0.50     # main driver
+W_WEAKNESS = 0.50
 W_IMPORTANCE = 0.20
 W_DIFFICULTY = 0.15
 W_TREND = 0.15
@@ -21,14 +15,10 @@ TREND_WEIGHT = {"improving": 0.0, "stable": 50.0, "declining": 100.0}
 
 
 def compute_priority(score: float, importance: int, difficulty: str, trend: str) -> float:
-    """
-    Compute priority (0-100). Higher = more urgent.
-    """
-    weakness = max(0.0, 100.0 - score)  # 0 when score=100, 100 when score=0
-    importance_score = (importance or 3) * 20.0  # 1→20, 3→60, 5→100
+    weakness = max(0.0, 100.0 - score)
+    importance_score = (importance or 3) * 20.0
     difficulty_score = DIFFICULTY_WEIGHT.get((difficulty or "medium").lower(), 50.0)
     trend_score = TREND_WEIGHT.get(trend or "stable", 50.0)
-
     priority = (
         W_WEAKNESS * weakness
         + W_IMPORTANCE * importance_score
@@ -38,26 +28,21 @@ def compute_priority(score: float, importance: int, difficulty: str, trend: str)
     return round(min(100.0, max(0.0, priority)), 1)
 
 
-def pick_activity(priority: float, attempts: int, score: float) -> tuple[str, int]:
-    """
-    Decide the suggested activity + duration.
-    Returns (activity_type, minutes).
-    """
+def pick_activity(priority: float, attempts: int, score: float) -> tuple:
     if attempts == 0:
-        return ("read", 45)           # never studied — read first
+        return ("read", 45)
     if score < 30:
-        return ("read", 60)           # very weak — re-read
+        return ("read", 60)
     if score < 50:
-        return ("practice", 45)       # weak — practice
+        return ("practice", 45)
     if score < 70:
-        return ("quiz", 30)           # developing — quiz
+        return ("quiz", 30)
     if score < 85:
-        return ("revise", 20)         # decent — light revision
-    return ("revise", 15)             # strong — quick refresh
+        return ("revise", 20)
+    return ("revise", 15)
 
 
 def build_reason(concept_name: str, score: float, trend: str, attempts: int, importance: int) -> str:
-    """Human-readable reason for the recommendation."""
     if attempts == 0:
         return f"You haven't tested '{concept_name}' yet. Start with a read-through."
     if trend == "declining":
@@ -74,18 +59,10 @@ def build_reason(concept_name: str, score: float, trend: str, attempts: int, imp
 
 
 def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, force: bool = False) -> list:
-    """
-    Compute recommendations for a student.
-
-    - Deletes existing pending recs (or all, if force)
-    - Computes new ones based on ConceptStat + Concept + Topic
-    - Saves them and returns the list
-    """
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
     if not student:
         raise ValueError("Student not found")
 
-    # Clear existing pending recs (we recompute fresh each time)
     existing = (
         db.query(models.Recommendation)
         .filter(models.Recommendation.student_id == student_id)
@@ -96,24 +73,25 @@ def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, fo
         existing.filter(models.Recommendation.status == "pending").delete()
     db.flush()
 
-    # Load concept stats for this student
+    # Eager-load concept -> topic -> subject (fixes N+1)
     stats = (
         db.query(models.ConceptStat)
+        .options(
+            joinedload(models.ConceptStat.concept)
+            .joinedload(models.Concept.topic)
+            .joinedload(models.Topic.subject)
+        )
         .filter(models.ConceptStat.student_id == student_id)
         .all()
     )
 
     candidates = []
-
     for stat in stats:
-        concept = db.query(models.Concept).filter(models.Concept.id == stat.concept_id).first()
-        if not concept:
+        concept = stat.concept
+        if not concept or not concept.topic:
             continue
-        topic = db.query(models.Topic).filter(models.Topic.id == concept.topic_id).first()
-        if not topic:
-            continue
+        topic = concept.topic
 
-        # Skip concepts already mastered
         if stat.score >= 90 and stat.confidence >= 0.6:
             continue
 
@@ -123,19 +101,9 @@ def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, fo
             difficulty=topic.difficulty,
             trend=stat.trend,
         )
-
-        activity, minutes = pick_activity(
-            priority=priority,
-            attempts=stat.attempts,
-            score=stat.score,
-        )
-
+        activity, minutes = pick_activity(priority, stat.attempts, stat.score)
         reason = build_reason(
-            concept_name=concept.name,
-            score=stat.score,
-            trend=stat.trend,
-            attempts=stat.attempts,
-            importance=concept.importance,
+            concept.name, stat.score, stat.trend, stat.attempts, concept.importance
         )
 
         candidates.append({
@@ -143,7 +111,7 @@ def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, fo
             "concept_name": concept.name,
             "topic_id": topic.id,
             "topic_name": topic.name,
-            "subject_name": (db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first() or type("X", (), {"name": "—"})).name,
+            "subject_name": topic.subject.name if topic.subject else "—",
             "importance": concept.importance,
             "score": stat.score,
             "trend": stat.trend,
@@ -155,12 +123,9 @@ def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, fo
             "reason": reason,
         })
 
-    # Sort by priority (highest first), then by lowest score
     candidates.sort(key=lambda x: (-x["priority"], x["score"]))
-
     top = candidates[:max_recs]
 
-    # Persist
     saved = []
     for c in top:
         rec = models.Recommendation(
@@ -174,10 +139,8 @@ def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, fo
         )
         db.add(rec)
         saved.append((rec, c))
-
     db.commit()
 
-    # Build response payload (after commit so IDs are set)
     result = []
     for rec, c in saved:
         db.refresh(rec)
@@ -198,14 +161,17 @@ def generate_recommendations(student_id: int, db: Session, max_recs: int = 8, fo
             "attempts": c["attempts"],
             "importance": c["importance"],
         })
-
     return result
 
 
 def get_pending_recommendations(student_id: int, db: Session) -> list:
-    """Fetch pending recommendations with concept + topic info joined."""
     recs = (
         db.query(models.Recommendation)
+        .options(
+            joinedload(models.Recommendation.concept)
+            .joinedload(models.Concept.topic)
+            .joinedload(models.Topic.subject)
+        )
         .filter(
             models.Recommendation.student_id == student_id,
             models.Recommendation.status == "pending",
@@ -216,14 +182,11 @@ def get_pending_recommendations(student_id: int, db: Session) -> list:
 
     result = []
     for r in recs:
-        concept = db.query(models.Concept).filter(models.Concept.id == r.concept_id).first()
+        concept = r.concept
         if not concept:
             continue
-        topic = db.query(models.Topic).filter(models.Topic.id == concept.topic_id).first()
-        subject_name = "—"
-        if topic:
-            subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
-            subject_name = subject.name if subject else "—"
+        topic = concept.topic
+        subject_name = topic.subject.name if topic and topic.subject else "—"
 
         stat = (
             db.query(models.ConceptStat)
@@ -251,11 +214,10 @@ def get_pending_recommendations(student_id: int, db: Session) -> list:
             "attempts": stat.attempts if stat else 0,
             "importance": concept.importance,
         })
-
     return result
 
 
-def mark_completed(rec_id: int, student_id: int, db: Session) -> models.Recommendation:
+def mark_completed(rec_id: int, student_id: int, db: Session):
     rec = (
         db.query(models.Recommendation)
         .filter(

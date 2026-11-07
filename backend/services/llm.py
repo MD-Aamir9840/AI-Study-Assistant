@@ -6,10 +6,6 @@ import json
 import re
 from ai_tutor import get_client
 
-# Current Groq production text models (as of Sept 2026):
-# - openai/gpt-oss-20b  → fast, good quality
-# - openai/gpt-oss-120b → slower, highest quality
-# Note: llama-3.1-8b-instant was retired on 16 Aug 2026.
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 FAST_MODEL = "openai/gpt-oss-20b"
 
@@ -67,16 +63,12 @@ def call_llm_json(
     prompt: str,
     system: str = "",
     temperature: float = 0.7,
-    max_tokens: int = 4000,
+    max_tokens: int = 4000,  # Increased back to 4000 to allow broad fields
     model: str | None = None,
 ):
-    """
-    Call Groq and return parsed JSON.
-    NOTE: gpt-oss models don't support response_format — we enforce JSON via prompt.
-    """
+    """Call Groq and return parsed JSON."""
     client = get_client()
 
-    # Ensure the word "json" is present (Groq's prompt rule + our own reminder)
     system_msg = system or ""
     if "json" not in system_msg.lower():
         system_msg = (

@@ -4,6 +4,7 @@ import {
   getSearchHistory,
   getEnrichedTopics,
   generateTest,
+  generateSmartTest,
   submitTest,
 } from "../api/client";
 import { useAuth } from "../context/AuthContext";
@@ -23,6 +24,7 @@ import {
   HelpCircle,
   Target,
   BarChart3,
+  Zap,
 } from "lucide-react";
 import "./Quiz.css";
 
@@ -45,17 +47,17 @@ export default function Quiz() {
   const [answers, setAnswers] = useState({});
   const [result, setResult] = useState(null);
   const [generating, setGenerating] = useState(false);
+  const [smartGenerating, setSmartGenerating] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [seconds, setSeconds] = useState(0);
-
   const [activeConcept, setActiveConcept] = useState(null);
 
   const timerRef = useRef(null);
   const autoStarted = useRef(false);
   const sessionRestored = useRef(false);
 
-  // 1. Load topics from cache + refresh
+  // Load topics from cache + refresh in background
   useEffect(() => {
     if (!user?.student_id) return;
 
@@ -63,7 +65,6 @@ export default function Quiz() {
     try {
       const h = JSON.parse(localStorage.getItem(HISTORY_CACHE_KEY) || "null");
       const t = JSON.parse(localStorage.getItem(TOPICS_CACHE_KEY) || "null");
-
       if (h && h.student_id === user.student_id) {
         setHistory(h.data || []);
         hasCache = true;
@@ -72,9 +73,7 @@ export default function Quiz() {
         setEnriched(t.data || []);
       }
       if (hasCache) setLoadingTopics(false);
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     refreshTopics(!hasCache);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -95,11 +94,7 @@ export default function Quiz() {
       try {
         localStorage.setItem(
           HISTORY_CACHE_KEY,
-          JSON.stringify({
-            student_id: user.student_id,
-            data,
-            fetchedAt: Date.now(),
-          })
+          JSON.stringify({ student_id: user.student_id, data, fetchedAt: Date.now() })
         );
       } catch {}
     }
@@ -110,11 +105,7 @@ export default function Quiz() {
       try {
         localStorage.setItem(
           TOPICS_CACHE_KEY,
-          JSON.stringify({
-            student_id: user.student_id,
-            data,
-            fetchedAt: Date.now(),
-          })
+          JSON.stringify({ student_id: user.student_id, data, fetchedAt: Date.now() })
         );
       } catch {}
     }
@@ -122,9 +113,8 @@ export default function Quiz() {
     setLoadingTopics(false);
   };
 
-  // 2. Merge history + enriched
+  // Merge history + enriched
   const enrichedMap = new Map(enriched.map((t) => [t.id, t]));
-
   const learnedTopics = history
     .map((h) => {
       const t = enrichedMap.get(h.topic_id);
@@ -139,24 +129,22 @@ export default function Quiz() {
     })
     .filter((t, i, arr) => arr.findIndex((x) => x.id === t.id) === i);
 
-  // 3. Auto-start if ?topic= is in URL
+  // Auto-start if ?topic= is in URL
   useEffect(() => {
     const urlTopic = Number(searchParams.get("topic"));
     if (!urlTopic || autoStarted.current || learnedTopics.length === 0) return;
-
     const topic = learnedTopics.find((t) => t.id === urlTopic);
     if (topic) {
       autoStarted.current = true;
-      startTest(topic);
+      startTest(topic, false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [learnedTopics, searchParams]);
 
-  // 4. Restore session
+  // Restore session
   useEffect(() => {
     if (!user?.student_id || sessionRestored.current) return;
     sessionRestored.current = true;
-
     try {
       const saved = JSON.parse(localStorage.getItem(SESSION_CACHE_KEY) || "null");
       if (
@@ -174,10 +162,9 @@ export default function Quiz() {
     } catch {}
   }, [user?.student_id]);
 
-  // Persist active session
+  // Persist session
   useEffect(() => {
-    if (!user?.student_id || !activeTopic || questions.length === 0 || result)
-      return;
+    if (!user?.student_id || !activeTopic || questions.length === 0 || result) return;
     try {
       localStorage.setItem(
         SESSION_CACHE_KEY,
@@ -204,8 +191,7 @@ export default function Quiz() {
     return () => clearInterval(timerRef.current);
   }, [questions.length, result]);
 
-  // 5. Handlers
-  const startTest = async (topic) => {
+  const startTest = async (topic, force = false) => {
     setActiveTopic(topic);
     setGenerating(true);
     setError("");
@@ -217,15 +203,39 @@ export default function Quiz() {
     localStorage.removeItem(SESSION_CACHE_KEY);
 
     try {
-      const res = await generateTest(topic.id, 6);
+      const res = await generateTest(topic.id, user.student_id, 6, force);
       setQuestions(res.data.questions);
     } catch (err) {
       setError(
-        err.response?.data?.detail ||
-          "Test generation failed. Try again in a moment."
+        err.response?.data?.detail || "Test generation failed. Try again in a moment."
       );
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const startSmartTest = async () => {
+    setSmartGenerating(true);
+    setError("");
+    try {
+      const res = await generateSmartTest(user.student_id, 6);
+      const smartTopic = {
+        id: res.data.topic_id,
+        name: res.data.topic_name,
+        subject_name: res.data.subject_name,
+        difficulty: res.data.difficulty,
+      };
+      setActiveTopic(smartTopic);
+      setQuestions(res.data.questions);
+      setAnswers({});
+      setCurrentIndex(0);
+      setResult(null);
+      setSeconds(0);
+      localStorage.removeItem(SESSION_CACHE_KEY);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Smart test generation failed.");
+    } finally {
+      setSmartGenerating(false);
     }
   };
 
@@ -282,10 +292,9 @@ export default function Quiz() {
   };
 
   const handleRetryNew = () => {
-    if (activeTopic) startTest(activeTopic);
+    if (activeTopic) startTest(activeTopic, true);
   };
 
-  // 6. Derived values
   const currentQuestion = questions[currentIndex];
   const progress =
     questions.length > 0 ? ((currentIndex + 1) / questions.length) * 100 : 0;
@@ -329,16 +338,10 @@ export default function Quiz() {
   };
 
   const openConceptDeepDive = (c) => {
-    setActiveConcept({
-      id: c.concept_id,
-      name: c.concept_name,
-      description: "",
-    });
+    setActiveConcept({ id: c.concept_id, name: c.concept_name, description: "" });
   };
 
-  // ==================================================
-  // RENDER: TOPIC SELECTION
-  // ==================================================
+  // TOPIC SELECTION
   if (!activeTopic) {
     return (
       <div className="quiz-page">
@@ -346,9 +349,28 @@ export default function Quiz() {
           <div>
             <h1 className="quiz-title">Test Your Understanding</h1>
             <p className="quiz-subtitle">
-              Pick a topic you've studied to take a concept-aware test.
+              Pick a topic you've studied or let the AI decide.
             </p>
           </div>
+        </div>
+
+        {/* SMART TEST BANNER */}
+        <div className="smart-test-banner">
+          <div className="stb-content">
+            <h3><Zap size={18} className="stb-icon" /> AI Smart Checkup</h3>
+            <p>Let the AI analyze your weak spots and generate a targeted test instantly.</p>
+          </div>
+          <button 
+            className="stb-btn" 
+            onClick={startSmartTest} 
+            disabled={smartGenerating || learnedTopics.length === 0}
+          >
+            {smartGenerating ? (
+              <><RefreshCw size={16} className="spin" /> Analyzing...</>
+            ) : (
+              <><Sparkles size={16} /> Start Smart Test</>
+            )}
+          </button>
         </div>
 
         {loadingTopics && learnedTopics.length === 0 && (
@@ -359,14 +381,8 @@ export default function Quiz() {
           <div className="quiz-empty-state">
             <HelpCircle size={48} />
             <h2>No learned topics yet</h2>
-            <p>
-              Search for a topic first, then come back to test your
-              understanding.
-            </p>
-            <button
-              className="btn-primary"
-              onClick={() => navigate("/search")}
-            >
+            <p>Search for a topic first, then come back to test your understanding.</p>
+            <button className="btn-primary" onClick={() => navigate("/search")}>
               <Sparkles size={14} /> Search a Topic
             </button>
           </div>
@@ -379,13 +395,12 @@ export default function Quiz() {
                 Your Topics ({learnedTopics.length})
               </h2>
             </div>
-
             <div className="topics-grid">
               {learnedTopics.map((t) => (
                 <button
                   key={t.id}
                   className="topic-test-card"
-                  onClick={() => startTest(t)}
+                  onClick={() => startTest(t, false)}
                 >
                   <div className="ttc-header">
                     <span className="ttc-subject">{t.subject_name}</span>
@@ -393,25 +408,18 @@ export default function Quiz() {
                       {t.attempts > 0 ? `${Math.round(t.score)}%` : "New"}
                     </span>
                   </div>
-
                   <div className="ttc-name">{t.name}</div>
-
                   <div className="ttc-footer">
                     <div className="ttc-meta">
                       {t.attempts > 0
                         ? `${t.attempts} attempt${t.attempts === 1 ? "" : "s"}`
                         : "Not tested yet"}
                     </div>
-                    <div className="ttc-time">
-                      {formatTimeAgo(t.searched_at)}
-                    </div>
+                    <div className="ttc-time">{formatTimeAgo(t.searched_at)}</div>
                   </div>
-
                   <div className="ttc-action">
                     <Play size={14} />
-                    <span>
-                      {t.attempts > 0 ? "Retake Test" : "Start Test"}
-                    </span>
+                    <span>{t.attempts > 0 ? "Retake Test" : "Start Test"}</span>
                     <ArrowRight size={14} />
                   </div>
                 </button>
@@ -430,7 +438,6 @@ export default function Quiz() {
               <p>Questions target specific concepts, not just topic facts.</p>
             </div>
           </div>
-
           <div className="quiz-help-card">
             <div className="qhc-icon icon-purple">
               <BarChart3 size={18} />
@@ -440,7 +447,6 @@ export default function Quiz() {
               <p>See exactly which concepts you're strong or weak in.</p>
             </div>
           </div>
-
           <div className="quiz-help-card">
             <div className="qhc-icon icon-green">
               <Sparkles size={18} />
@@ -455,9 +461,7 @@ export default function Quiz() {
     );
   }
 
-  // ==================================================
-  // RENDER: TEST RUNNING
-  // ==================================================
+  // TEST RUNNING
   return (
     <div className="quiz-page">
       <div className="quiz-header">
@@ -473,7 +477,7 @@ export default function Quiz() {
         {!generating && !result && (
           <button
             className="btn-regenerate"
-            onClick={() => startTest(activeTopic)}
+            onClick={() => startTest(activeTopic, true)}
             disabled={generating}
           >
             <RefreshCw size={14} />
@@ -504,7 +508,6 @@ export default function Quiz() {
                 <Clock size={14} /> {formatTime(seconds)}
               </div>
             </div>
-
             <div className="quiz-progress-bar">
               <div
                 className="quiz-progress-fill"
@@ -518,11 +521,9 @@ export default function Quiz() {
                 {currentQuestion.question_type || "conceptual"} ·{" "}
                 {currentQuestion.difficulty}
               </div>
-
               <h2 className="quiz-q-text">
                 {currentIndex + 1}. {currentQuestion.question}
               </h2>
-
               <div className="quiz-options">
                 {["A", "B", "C", "D"].map((opt) => {
                   const key = `option_${opt.toLowerCase()}`;
@@ -542,9 +543,7 @@ export default function Quiz() {
                         checked={selected}
                         onChange={() => handleAnswer(currentQuestion.id, opt)}
                       />
-                      <span className="quiz-opt-text">
-                        {currentQuestion[key]}
-                      </span>
+                      <span className="quiz-opt-text">{currentQuestion[key]}</span>
                     </label>
                   );
                 })}
@@ -599,7 +598,6 @@ export default function Quiz() {
               <span>Answered</span>
               <b>{Object.keys(answers).length}</b>
             </div>
-
             {currentQuestion.concepts?.length > 0 && (
               <div className="quiz-info-concepts">
                 <div className="quiz-info-subtitle">This question tests</div>
@@ -610,7 +608,6 @@ export default function Quiz() {
                 ))}
               </div>
             )}
-
             <div className="quiz-resume-note">
               Your answers are saved automatically.
             </div>
@@ -650,9 +647,7 @@ export default function Quiz() {
                       {c.concept_name}
                     </button>
                     <div className="concept-result-right">
-                      <span
-                        className={`concept-trend trend-${c.trend}`}
-                      >
+                      <span className={`concept-trend trend-${c.trend}`}>
                         {trendIcon(c.trend)}
                         {c.trend}
                       </span>
@@ -722,7 +717,6 @@ export default function Quiz() {
         </div>
       )}
 
-      {/* Concept Deep-Dive Modal */}
       {activeConcept && (
         <ConceptModal
           concept={activeConcept}

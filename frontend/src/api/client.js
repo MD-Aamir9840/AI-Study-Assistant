@@ -62,6 +62,8 @@ export const getStudentStudyPlan = (studentId) =>
   api.get(`/students/${studentId}/study-plan`);
 export const completeStudyPlan = (id) =>
   api.put(`/study-plan/${id}/complete`);
+export const getDailyStudyPlan = (studentId) =>
+  api.get(`/students/${studentId}/study-plan/daily`);
 
 // ==================================================
 // LEGACY QUIZ
@@ -118,10 +120,29 @@ export const getConceptContent = (conceptId, force = false) =>
   api.post(`/concepts/${conceptId}/content?force=${force}`);
 
 // ==================================================
-// TESTS
+// TESTS (ADAPTIVE & CACHED)
 // ==================================================
-export const generateTest = (payload) => api.post("/tests/generate", payload);
-export const submitTest = (payload) => api.post("/tests/submit", payload);
+export const generateTest = (topicId, studentId, numQuestions = 6, force = false) =>
+  api.post("/tests/generate", {
+    topic_id: topicId,
+    num_questions: numQuestions,
+    student_id: studentId,
+    force: force,
+  });
+
+export const generateSmartTest = (studentId, numQuestions = 6) =>
+  api.post("/tests/generate-smart", {
+    student_id: studentId,
+    num_questions: numQuestions,
+  });
+
+export const submitTest = (studentId, answers, sessionId = null) => 
+  api.post("/tests/submit", { 
+    student_id: studentId, 
+    answers: answers, 
+    session_id: sessionId 
+  });
+
 export const getStudentConcepts = (studentId) =>
   api.get(`/students/${studentId}/concepts`);
 
@@ -134,6 +155,15 @@ export const listRecommendations = (studentId) =>
   api.get(`/students/${studentId}/recommendations`);
 export const completeRecommendation = (recId, studentId) =>
   api.put(`/recommendations/${recId}/complete?student_id=${studentId}`);
+
+// ==================================================
+// STRUGGLES + ROADMAPS
+// ==================================================
+export const getStudentStruggles = (studentId) =>
+  api.get(`/students/${studentId}/struggles`);
+  
+export const analyzeTopic = (topicId, studentId) =>
+  api.post(`/topics/${topicId}/analyze`, { student_id: studentId });
 
 // ==================================================
 // SEARCH HISTORY
@@ -169,40 +199,43 @@ export const generateFlashcards = (payload) =>
   api.post("/flashcards/generate", payload);
 
 // ==================================================
-// NOVAAI CHAT — Models + Conversations
+// ONBOARDING
+// ==================================================
+export const startOnboarding = (payload) =>
+  api.post("/onboarding/start", payload);
+export const generateDiagnostic = (studentId) =>
+  api.post("/onboarding/diagnostic/generate", { student_id: studentId });
+export const submitDiagnostic = (payload) =>
+  api.post("/onboarding/diagnostic/submit", payload);
+export const getOnboardingStatus = (studentId) =>
+  api.get(`/onboarding/status/${studentId}`);
+
+// ==================================================
+// NOVAAI CHAT
 // ==================================================
 export const getChatModels = () => api.get("/chat/models");
 
 export const listConversations = (studentId, q = "") =>
   api.get(`/chat/conversations?student_id=${studentId}&q=${encodeURIComponent(q)}`);
 
-export const createConversation = (studentId, title = "New chat", model = "nova-balanced") =>
+export const createConversation = (studentId, title = "New chat", model = "groq-oss-120b") =>
   api.post("/chat/conversations", { student_id: studentId, title, model });
 
 export const getConversation = (convId, studentId) =>
   api.get(`/chat/conversations/${convId}?student_id=${studentId}`);
 
 export const updateConversation = (convId, studentId, updates) =>
-  api.patch(
-    `/chat/conversations/${convId}?student_id=${studentId}`,
-    updates
-  );
+  api.patch(`/chat/conversations/${convId}?student_id=${studentId}`, updates);
 
 export const deleteConversation = (convId, studentId) =>
   api.delete(`/chat/conversations/${convId}?student_id=${studentId}`);
 
 export const sendMessageFeedback = (msgId, studentId, feedback) =>
-  api.patch(`/chat/messages/${msgId}/feedback`, {
-    student_id: studentId,
-    feedback,
-  });
+  api.patch(`/chat/messages/${msgId}/feedback`, { student_id: studentId, feedback });
 
 export const deleteMessage = (msgId, studentId) =>
   api.delete(`/chat/messages/${msgId}?student_id=${studentId}`);
 
-// ==================================================
-// NOVAAI CHAT — Attachments (RAG)
-// ==================================================
 export const uploadChatAttachment = (convId, studentId, file) => {
   const formData = new FormData();
   formData.append("file", file);
@@ -223,62 +256,30 @@ export const getAttachmentDebug = (attachmentId) =>
   api.get(`/chat/attachments/${attachmentId}/debug`);
 
 // ==================================================
-// ALIASES (compat with older import names used across pages)
+// ALIASES (compat with older import names)
 // ==================================================
 export const getRecommendationsList = listRecommendations;
-
 export const searchTopic = (topic_name, student_id, difficulty = "medium") =>
   searchOrCreateTopic({ topic_name, student_id, difficulty });
-
 export const getAnalytics = getDashboardAnalytics;
 export const getStudentStats = getProfileStats;
 export const clearHistory = clearSearchHistory;
 export const deleteHistoryEntry = deleteSearchHistoryEntry;
-
-// Topic regeneration alias (TopicView.jsx uses this name)
-export const regenerateContent = (topicId) =>
-  generateTopicContent(topicId, true);
-
-// Common topic/concept aliases
+export const regenerateContent = (topicId) => generateTopicContent(topicId, true);
 export const getTopic = getTopicFull;
 export const getConcept = getConceptContent;
 export const generateConcept = getConceptContent;
 export const listConcepts = listTopicConcepts;
 export const extractConcepts = extractTopicConcepts;
-
-// Test aliases
 export const startTest = generateTest;
 export const finishTest = submitTest;
-
-// Recommendation aliases
 export const getRecommendations = listRecommendations;
 export const markRecommendationComplete = completeRecommendation;
-
-// Flashcard alias
 export const getFlashcards = generateFlashcards;
-// Phase 2 — Onboarding
-export const startOnboarding = (payload) =>
-  api.post("/onboarding/start", payload);
-export const generateDiagnostic = (studentId) =>
-  api.post("/onboarding/diagnostic/generate", { student_id: studentId });
-export const submitDiagnostic = (payload) =>
-  api.post("/onboarding/diagnostic/submit", payload);
-export const getOnboardingStatus = (studentId) =>
-  api.get(`/onboarding/status/${studentId}`);
+
 // ==================================================
 // NOVAAI CHAT — Streaming (SSE)
 // ==================================================
-/**
- * Stream a chat message via Server-Sent Events.
- *
- * @param {number}   convId       Conversation ID
- * @param {number}   studentId    Student ID
- * @param {string}   content      User's message text
- * @param {string}   model        Model ID (e.g. "nova-balanced")
- * @param {object}   handlers     Callbacks: { user_message_id, title, sources, web_sources, delta, done, error }
- * @param {AbortSignal} signal    Optional abort signal
- * @param {object}   options      Optional: { web_search: boolean }
- */
 export async function streamChatMessage(
   convId,
   studentId,
@@ -305,14 +306,10 @@ export async function streamChatMessage(
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
-    throw new Error(
-      `Stream failed (${response.status}): ${errText || response.statusText}`
-    );
+    throw new Error(`Stream failed (${response.status}): ${errText || response.statusText}`);
   }
 
-  if (!response.body) {
-    throw new Error("Response has no body — streaming not supported.");
-  }
+  if (!response.body) throw new Error("Response has no body — streaming not supported.");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
@@ -323,7 +320,6 @@ export async function streamChatMessage(
     if (done) break;
 
     buffer += decoder.decode(value, { stream: true });
-
     const parts = buffer.split("\n\n");
     buffer = parts.pop() || "";
 
@@ -338,7 +334,6 @@ export async function streamChatMessage(
         try {
           const data = JSON.parse(payload);
           const type = data.type;
-
           if (handlers[type]) {
             handlers[type](data);
           } else if (handlers.onEvent) {
@@ -352,7 +347,4 @@ export async function streamChatMessage(
   }
 }
 
-// ==================================================
-// DEFAULT EXPORT
-// ==================================================
 export default api;

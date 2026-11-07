@@ -1,10 +1,12 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import and_, or_, func
 from pydantic import BaseModel
 from datetime import date as date_cls, timedelta, datetime
 from typing import Optional, Dict
+from collections import defaultdict
 import json
 import re as _re
 
@@ -32,7 +34,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 # ==================================================
 # DB Dependency
 # ==================================================
@@ -43,14 +44,12 @@ def get_db():
     finally:
         db.close()
 
-
 # ==================================================
 # ROOT
 # ==================================================
 @app.get("/")
 def home():
     return {"message": "AI Study Assistant Backend is Running!"}
-
 
 # ==================================================
 # AUTH
@@ -59,7 +58,6 @@ class LoginRequest(BaseModel):
     email: str
     name: Optional[str] = None
     course: Optional[str] = None
-
 
 @app.post("/auth/login")
 def login_or_register(payload: LoginRequest, db: Session = Depends(get_db)):
@@ -101,7 +99,6 @@ def login_or_register(payload: LoginRequest, db: Session = Depends(get_db)):
         "created": created,
     }
 
-
 # ==================================================
 # STUDENTS
 # ==================================================
@@ -116,11 +113,9 @@ def create_student(student: schemas.StudentCreate, db: Session = Depends(get_db)
     db.refresh(new_student)
     return new_student
 
-
 @app.get("/students", response_model=list[schemas.StudentResponse])
 def get_all_students(db: Session = Depends(get_db)):
     return db.query(models.Student).all()
-
 
 @app.get("/students/{student_id}")
 def get_student(student_id: int, db: Session = Depends(get_db)):
@@ -144,7 +139,6 @@ def get_student(student_id: int, db: Session = Depends(get_db)):
         "preferred_language": student.preferred_language or "en",
     }
 
-
 class StudentUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
@@ -159,7 +153,6 @@ class StudentUpdate(BaseModel):
     github: Optional[str] = None
     linkedin: Optional[str] = None
     preferred_language: Optional[str] = None
-
 
 @app.put("/students/{student_id}")
 def update_student(student_id: int, updates: StudentUpdate, db: Session = Depends(get_db)):
@@ -203,7 +196,6 @@ def update_student(student_id: int, updates: StudentUpdate, db: Session = Depend
         "preferred_language": student.preferred_language or "en",
     }
 
-
 @app.delete("/students/{student_id}")
 def delete_student(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
@@ -225,7 +217,6 @@ def delete_student(student_id: int, db: Session = Depends(get_db)):
     db.delete(student)
     db.commit()
     return {"message": "Student and all related data deleted", "id": student_id}
-
 
 @app.get("/students/{student_id}/export")
 def export_student_data(student_id: int, db: Session = Depends(get_db)):
@@ -285,7 +276,6 @@ def export_student_data(student_id: int, db: Session = Depends(get_db)):
         "exported_at": str(date_cls.today()),
     }
 
-
 @app.get("/students/{student_id}/profile-stats")
 def get_profile_stats(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
@@ -326,7 +316,6 @@ def get_profile_stats(student_id: int, db: Session = Depends(get_db)):
         "member_since": joined_at[0].isoformat() if joined_at and joined_at[0] else None,
     }
 
-
 # ==================================================
 # SUBJECTS
 # ==================================================
@@ -341,16 +330,13 @@ def create_subject(subject: schemas.SubjectCreate, db: Session = Depends(get_db)
     db.refresh(new_subject)
     return new_subject
 
-
 @app.get("/subjects", response_model=list[schemas.SubjectResponse])
 def get_all_subjects(db: Session = Depends(get_db)):
     return db.query(models.Subject).all()
 
-
 @app.get("/students/{student_id}/subjects", response_model=list[schemas.SubjectResponse])
 def get_student_subjects(student_id: int, db: Session = Depends(get_db)):
     return db.query(models.Subject).filter(models.Subject.student_id == student_id).all()
-
 
 @app.delete("/subjects/{subject_id}")
 def delete_subject(subject_id: int, db: Session = Depends(get_db)):
@@ -360,7 +346,6 @@ def delete_subject(subject_id: int, db: Session = Depends(get_db)):
     db.delete(subject)
     db.commit()
     return {"message": "Subject deleted", "id": subject_id}
-
 
 # ==================================================
 # TOPICS
@@ -376,16 +361,13 @@ def create_topic(topic: schemas.TopicCreate, db: Session = Depends(get_db)):
     db.refresh(new_topic)
     return new_topic
 
-
 @app.get("/topics", response_model=list[schemas.TopicResponse])
 def get_all_topics(db: Session = Depends(get_db)):
     return db.query(models.Topic).all()
 
-
 @app.get("/subjects/{subject_id}/topics", response_model=list[schemas.TopicResponse])
 def get_subject_topics(subject_id: int, db: Session = Depends(get_db)):
     return db.query(models.Topic).filter(models.Topic.subject_id == subject_id).all()
-
 
 @app.delete("/topics/{topic_id}")
 def delete_topic(topic_id: int, db: Session = Depends(get_db)):
@@ -396,33 +378,38 @@ def delete_topic(topic_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Topic deleted", "id": topic_id}
 
-
 @app.get("/students/{student_id}/topics/enriched")
 def get_enriched_topics(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    subjects = db.query(models.Subject).filter(models.Subject.student_id == student_id).all()
-    result = []
-    for subject in subjects:
-        topics = db.query(models.Topic).filter(models.Topic.subject_id == subject.id).all()
-        for topic in topics:
-            perf = db.query(models.Performance).filter(
+    results = (
+        db.query(models.Topic, models.Subject, models.Performance)
+        .join(models.Subject, models.Topic.subject_id == models.Subject.id)
+        .outerjoin(
+            models.Performance,
+            and_(
+                models.Performance.topic_id == models.Topic.id,
                 models.Performance.student_id == student_id,
-                models.Performance.topic_id == topic.id,
-            ).first()
-            result.append({
-                "id": topic.id,
-                "name": topic.name,
-                "difficulty": topic.difficulty,
-                "subject_id": subject.id,
-                "subject_name": subject.name,
-                "score": perf.score if perf else 0.0,
-                "attempts": perf.attempts if perf else 0,
-            })
-    return result
+            ),
+        )
+        .filter(models.Subject.student_id == student_id)
+        .all()
+    )
 
+    result = []
+    for topic, subject, perf in results:
+        result.append({
+            "id": topic.id,
+            "name": topic.name,
+            "difficulty": topic.difficulty,
+            "subject_id": subject.id,
+            "subject_name": subject.name,
+            "score": perf.score if perf else 0.0,
+            "attempts": perf.attempts if perf else 0,
+        })
+    return result
 
 # ==================================================
 # PERFORMANCE
@@ -435,11 +422,9 @@ def create_performance(perf: schemas.PerformanceCreate, db: Session = Depends(ge
     db.refresh(new_perf)
     return new_perf
 
-
 @app.get("/students/{student_id}/performance", response_model=list[schemas.PerformanceResponse])
 def get_student_performance(student_id: int, db: Session = Depends(get_db)):
     return db.query(models.Performance).filter(models.Performance.student_id == student_id).all()
-
 
 @app.put("/performance/{performance_id}", response_model=schemas.PerformanceResponse)
 def update_performance(performance_id: int, score: float, attempts: int = 1, db: Session = Depends(get_db)):
@@ -452,7 +437,6 @@ def update_performance(performance_id: int, score: float, attempts: int = 1, db:
     db.refresh(perf)
     return perf
 
-
 # ==================================================
 # STUDY PLAN (legacy)
 # ==================================================
@@ -464,11 +448,9 @@ def create_study_plan(plan: schemas.StudyPlanCreate, db: Session = Depends(get_d
     db.refresh(new_plan)
     return new_plan
 
-
 @app.get("/students/{student_id}/study-plan", response_model=list[schemas.StudyPlanResponse])
 def get_student_study_plan(student_id: int, db: Session = Depends(get_db)):
     return db.query(models.StudyPlan).filter(models.StudyPlan.student_id == student_id).all()
-
 
 @app.put("/study-plan/{plan_id}/complete", response_model=schemas.StudyPlanResponse)
 def complete_study_plan(plan_id: int, db: Session = Depends(get_db)):
@@ -479,6 +461,23 @@ def complete_study_plan(plan_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(plan)
     return plan
+
+# ==================================================
+# AI DAILY STUDY PLANNER
+# ==================================================
+from services.study_planner_service import generate_daily_plan
+
+@app.get("/students/{student_id}/study-plan/daily")
+def get_daily_study_plan(student_id: int, db: Session = Depends(get_db)):
+    try:
+        result = generate_daily_plan(student_id, db)
+        return {
+            "student_id": student_id, 
+            "plan": result.get("plan", []), 
+            "message": result.get("message", "")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================================================
@@ -492,15 +491,12 @@ def create_quiz_question(q: schemas.QuizQuestionCreate, db: Session = Depends(ge
     db.refresh(new_q)
     return new_q
 
-
 @app.get("/topics/{topic_id}/questions", response_model=list[schemas.QuizQuestionResponse])
 def get_topic_questions(topic_id: int, db: Session = Depends(get_db)):
     return db.query(models.QuizQuestion).filter(models.QuizQuestion.topic_id == topic_id).all()
 
-
 class QuizQuestionBulk(BaseModel):
     questions: list[schemas.QuizQuestionCreate]
-
 
 @app.post("/quiz/questions/bulk")
 def bulk_create_questions(payload: QuizQuestionBulk, db: Session = Depends(get_db)):
@@ -514,7 +510,6 @@ def bulk_create_questions(payload: QuizQuestionBulk, db: Session = Depends(get_d
         db.refresh(q)
     return {"created": len(created), "question_ids": [q.id for q in created]}
 
-
 @app.post("/quiz/results", response_model=schemas.QuizResultResponse)
 def create_quiz_result(r: schemas.QuizResultCreate, db: Session = Depends(get_db)):
     new_r = models.QuizResult(**r.dict())
@@ -523,14 +518,12 @@ def create_quiz_result(r: schemas.QuizResultCreate, db: Session = Depends(get_db
     db.refresh(new_r)
     return new_r
 
-
 @app.get("/students/{student_id}/quiz-results", response_model=list[schemas.QuizResultResponse])
 def get_student_quiz_results(student_id: int, db: Session = Depends(get_db)):
     return db.query(models.QuizResult).filter(models.QuizResult.student_id == student_id).all()
 
-
 # ==================================================
-# DASHBOARD ANALYTICS
+# DASHBOARD ANALYTICS (OPTIMIZED)
 # ==================================================
 @app.get("/analytics/dashboard/{student_id}")
 def dashboard_analytics(student_id: int, db: Session = Depends(get_db)):
@@ -547,23 +540,61 @@ def dashboard_analytics(student_id: int, db: Session = Depends(get_db)):
     strong_concepts = sum(1 for s in stats if s.score >= 75)
     weak_concepts = sum(1 for s in stats if s.score < 50)
 
-    total_concepts = 0
+    subject_ids = [s.id for s in subjects]
+    if subject_ids:
+        total_concepts = (
+            db.query(models.Concept)
+            .join(models.Topic, models.Concept.topic_id == models.Topic.id)
+            .filter(models.Topic.subject_id.in_(subject_ids))
+            .count()
+        )
+    else:
+        total_concepts = 0
+
+    perf_query = (
+        db.query(
+            models.Subject.name.label("subject_name"),
+            models.ConceptStat.score.label("score")
+        )
+        .join(models.Topic, models.Subject.id == models.Topic.subject_id)
+        .join(models.Concept, models.Topic.id == models.Concept.topic_id)
+        .join(models.ConceptStat, and_(
+            models.Concept.id == models.ConceptStat.concept_id,
+            models.ConceptStat.student_id == student_id
+        ))
+        .filter(models.Subject.student_id == student_id)
+        .all()
+    )
+    
+    subj_scores = defaultdict(list)
+    for row in perf_query:
+        subj_scores[row.subject_name].append(row.score)
+
+    topic_counts_query = (
+        db.query(models.Subject.name, func.count(models.Topic.id).label("count"))
+        .join(models.Topic, models.Subject.id == models.Topic.subject_id)
+        .filter(models.Subject.student_id == student_id)
+        .group_by(models.Subject.name)
+        .all()
+    )
+    topic_counts = {row.name: row.count for row in topic_counts_query}
+
+    subject_performance = []
     for subject in subjects:
-        topics = db.query(models.Topic).filter(models.Topic.subject_id == subject.id).all()
-        for topic in topics:
-            total_concepts += db.query(models.Concept).filter(models.Concept.topic_id == topic.id).count()
+        scores = subj_scores.get(subject.name, [])
+        avg = round(sum(scores) / len(scores), 1) if scores else 0.0
+        t_count = topic_counts.get(subject.name, 0)
+        subject_performance.append({
+            "subject_name": subject.name,
+            "avg_score": avg,
+            "topics_count": t_count,
+        })
 
-    attempts = db.query(models.QuestionAttempt).filter(
-        models.QuestionAttempt.student_id == student_id
-    ).all()
-
+    attempts = db.query(models.QuestionAttempt).filter(models.QuestionAttempt.student_id == student_id).all()
     session_ids = {a.session_id for a in attempts if a.session_id}
     test_sessions = len(session_ids)
 
-    attempt_dates = sorted(
-        {a.attempted_at.date() for a in attempts if a.attempted_at},
-        reverse=True,
-    )
+    attempt_dates = sorted({a.attempted_at.date() for a in attempts if a.attempted_at}, reverse=True)
     streak = 0
     if attempt_dates:
         today = date_cls.today()
@@ -576,33 +607,14 @@ def dashboard_analytics(student_id: int, db: Session = Depends(get_db)):
                 elif d < cursor:
                     break
 
-    subject_performance = []
-    for subject in subjects:
-        topic_concept_scores = []
-        topics = db.query(models.Topic).filter(models.Topic.subject_id == subject.id).all()
-        for topic in topics:
-            concepts = db.query(models.Concept).filter(models.Concept.topic_id == topic.id).all()
-            for c in concepts:
-                stat = db.query(models.ConceptStat).filter(
-                    models.ConceptStat.student_id == student_id,
-                    models.ConceptStat.concept_id == c.id,
-                ).first()
-                if stat:
-                    topic_concept_scores.append(stat.score)
+    top_rec = None
+    try:
+        from services.recommendation_service import get_pending_recommendations
+        pending = get_pending_recommendations(student_id, db)
+        top_rec = pending[0] if pending else None
+    except Exception:
+        pass
 
-        avg = (
-            round(sum(topic_concept_scores) / len(topic_concept_scores), 1)
-            if topic_concept_scores else 0.0
-        )
-        subject_performance.append({
-            "subject_name": subject.name,
-            "avg_score": avg,
-            "topics_count": len(topics),
-        })
-
-    from recommendation import get_recommendations
-    recs = get_recommendations(student_id, db)
-    top_rec = recs[0] if recs else None
     ai_recommendation = (
         f"Focus on {top_rec['topic_name']} in {top_rec['subject_name']} today. {top_rec['reason']}"
         if top_rec else "Search for a topic to get started."
@@ -622,7 +634,6 @@ def dashboard_analytics(student_id: int, db: Session = Depends(get_db)):
         "subject_performance": subject_performance,
         "ai_recommendation": ai_recommendation,
     }
-
 
 # ==================================================
 # ANALYTICS TIMELINE
@@ -765,12 +776,10 @@ def analytics_timeline(student_id: int, days: int = 30, db: Session = Depends(ge
         "topic_breakdown": topic_breakdown,
     }
 
-
 # ==================================================
 # ML RISK PREDICTION
 # ==================================================
 from ml_predictor import predict_risk
-
 
 @app.get("/ml/predict/{student_id}")
 def ml_predict(student_id: int, db: Session = Depends(get_db)):
@@ -815,19 +824,16 @@ def ml_predict(student_id: int, db: Session = Depends(get_db)):
         "predictions": predictions,
     }
 
-
 # ==================================================
-# AI TUTOR (legacy for AI Study Assistant)
+# AI TUTOR (legacy)
 # ==================================================
-from ai_tutor import ask_tutor, filter_weak_concepts
+from ai_tutor import ask_tutor, filter_weak_concepts, get_client
 from services.language_service import get_student_language
-
 
 class AIAskRequest(BaseModel):
     student_id: int
     question: str
     history: list[dict] = []
-
 
 @app.post("/ai/ask")
 def ai_ask(req: AIAskRequest, db: Session = Depends(get_db)):
@@ -878,7 +884,6 @@ def ai_ask(req: AIAskRequest, db: Session = Depends(get_db)):
         "context_concepts": [w["concept_name"] for w in weak],
     }
 
-
 # ==================================================
 # PHASE B — TOPIC SEARCH, CONTENT & CONCEPTS
 # ==================================================
@@ -889,12 +894,10 @@ from services.content_service import (
 )
 from services.concept_service import get_or_create_concepts
 
-
 class TopicSearchRequest(BaseModel):
     topic_name: str
     student_id: int
     difficulty: str = "medium"
-
 
 @app.post("/topics/search-or-create")
 def search_or_create_topic(payload: TopicSearchRequest, db: Session = Depends(get_db)):
@@ -979,7 +982,6 @@ def search_or_create_topic(payload: TopicSearchRequest, db: Session = Depends(ge
         "created": created,
     }
 
-
 @app.post("/topics/{topic_id}/generate-content")
 def generate_topic_content(topic_id: int, force: bool = False, db: Session = Depends(get_db)):
     topic = db.query(models.Topic).filter(models.Topic.id == topic_id).first()
@@ -993,14 +995,12 @@ def generate_topic_content(topic_id: int, force: bool = False, db: Session = Dep
         raise HTTPException(status_code=500, detail=f"Content generation failed: {e}")
     return {"topic_id": topic_id, "topic_name": topic.name, "content": content}
 
-
 @app.get("/topics/{topic_id}/content")
 def get_topic_content(topic_id: int, db: Session = Depends(get_db)):
     record = db.query(models.LearningContent).filter(models.LearningContent.topic_id == topic_id).first()
     if not record:
         raise HTTPException(status_code=404, detail="Content not generated yet")
     return {"topic_id": topic_id, "content": json.loads(record.content_json)}
-
 
 @app.post("/topics/{topic_id}/extract-concepts")
 def extract_topic_concepts(topic_id: int, force: bool = False, db: Session = Depends(get_db)):
@@ -1020,7 +1020,6 @@ def extract_topic_concepts(topic_id: int, force: bool = False, db: Session = Dep
         ],
     }
 
-
 @app.get("/topics/{topic_id}/concepts")
 def list_topic_concepts(topic_id: int, db: Session = Depends(get_db)):
     concepts = (
@@ -1036,7 +1035,6 @@ def list_topic_concepts(topic_id: int, db: Session = Depends(get_db)):
             for c in concepts
         ],
     }
-
 
 @app.get("/topics/{topic_id}/full")
 def get_topic_full(topic_id: int, db: Session = Depends(get_db)):
@@ -1066,7 +1064,6 @@ def get_topic_full(topic_id: int, db: Session = Depends(get_db)):
         ],
     }
 
-
 # ==================================================
 # CONCEPT DEEP-DIVE
 # ==================================================
@@ -1074,7 +1071,6 @@ from services.concept_content_service import (
     get_or_create_concept_content,
     invalidate_concept_content,
 )
-
 
 @app.post("/concepts/{concept_id}/content")
 def get_concept_content_endpoint(
@@ -1100,23 +1096,25 @@ def get_concept_content_endpoint(
         "content": content,
     }
 
-
 # ==================================================
-# PHASE C — CONCEPT-AWARE TESTING
+# PHASE C — CONCEPT-AWARE TESTING (ADAPTIVE)
 # ==================================================
-from services.question_service import generate_test, submit_test
-
+from services.question_service import generate_test, generate_smart_test, submit_test
 
 class TestGenerateRequest(BaseModel):
     topic_id: int
     num_questions: int = 8
+    student_id: Optional[int] = None
+    force: bool = False
 
+class SmartTestRequest(BaseModel):
+    student_id: int
+    num_questions: int = 6
 
 class TestSubmitRequest(BaseModel):
     student_id: int
     answers: Dict[str, Optional[str]]
     session_id: Optional[str] = None
-
 
 @app.post("/tests/generate")
 def generate_test_endpoint(payload: TestGenerateRequest, db: Session = Depends(get_db)):
@@ -1125,11 +1123,22 @@ def generate_test_endpoint(payload: TestGenerateRequest, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Topic not found")
     num = max(3, min(payload.num_questions, 15))
     try:
-        result = generate_test(payload.topic_id, db, num)
+        result = generate_test(
+            payload.topic_id, db, num, student_id=payload.student_id, force=payload.force
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Test generation failed: {e}")
     return result
 
+@app.post("/tests/generate-smart")
+def generate_smart_test_endpoint(payload: SmartTestRequest, db: Session = Depends(get_db)):
+    try:
+        result = generate_smart_test(payload.student_id, db, payload.num_questions)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Smart test generation failed: {e}")
+    return result
 
 @app.post("/tests/submit")
 def submit_test_endpoint(payload: TestSubmitRequest, db: Session = Depends(get_db)):
@@ -1144,25 +1153,30 @@ def submit_test_endpoint(payload: TestSubmitRequest, db: Session = Depends(get_d
         raise HTTPException(status_code=500, detail=f"Test submission failed: {e}")
     return result
 
-
 @app.get("/students/{student_id}/concepts")
 def get_student_concepts(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    stats = db.query(models.ConceptStat).filter(models.ConceptStat.student_id == student_id).all()
+    stats = (
+        db.query(models.ConceptStat)
+        .options(
+            joinedload(models.ConceptStat.concept)
+            .joinedload(models.Concept.topic)
+            .joinedload(models.Topic.subject)
+        )
+        .filter(models.ConceptStat.student_id == student_id)
+        .all()
+    )
 
-    from collections import defaultdict
     by_topic = defaultdict(list)
 
     for s in stats:
-        concept = db.query(models.Concept).filter(models.Concept.id == s.concept_id).first()
-        if not concept:
+        concept = s.concept
+        if not concept or not concept.topic:
             continue
-        topic = db.query(models.Topic).filter(models.Topic.id == concept.topic_id).first()
-        if not topic:
-            continue
+        topic = concept.topic
 
         try:
             risk = predict_risk(
@@ -1195,17 +1209,17 @@ def get_student_concepts(student_id: int, db: Session = Depends(get_db)):
 
     topics_data = []
     for tid, concept_list in by_topic.items():
-        topic = db.query(models.Topic).filter(models.Topic.id == tid).first()
-        subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
-        topics_data.append({
-            "topic_id": tid,
-            "topic_name": topic.name,
-            "subject_name": subject.name if subject else "General",
-            "concepts": concept_list,
-        })
+        topic_obj = next((s.concept.topic for s in stats if s.concept.topic_id == tid), None)
+        
+        if topic_obj:
+            topics_data.append({
+                "topic_id": tid,
+                "topic_name": topic_obj.name,
+                "subject_name": topic_obj.subject.name if topic_obj.subject else "General",
+                "concepts": concept_list,
+            })
 
     return {"student_id": student_id, "topics": topics_data}
-
 
 # ==================================================
 # PHASE D — RECOMMENDATION ENGINE
@@ -1215,7 +1229,6 @@ from services.recommendation_service import (
     get_pending_recommendations,
     mark_completed,
 )
-
 
 @app.post("/students/{student_id}/generate-recommendations")
 def generate_recs(student_id: int, force: bool = False, db: Session = Depends(get_db)):
@@ -1233,7 +1246,6 @@ def generate_recs(student_id: int, force: bool = False, db: Session = Depends(ge
         "recommendations": recs,
     }
 
-
 @app.get("/students/{student_id}/recommendations")
 def list_recs(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
@@ -1249,7 +1261,6 @@ def list_recs(student_id: int, db: Session = Depends(get_db)):
         "recommendations": recs,
     }
 
-
 @app.put("/recommendations/{rec_id}/complete")
 def complete_rec(rec_id: int, student_id: int, db: Session = Depends(get_db)):
     try:
@@ -1257,7 +1268,6 @@ def complete_rec(rec_id: int, student_id: int, db: Session = Depends(get_db)):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return {"message": "Marked as complete", "id": rec.id, "status": rec.status}
-
 
 # ==================================================
 # SEARCH HISTORY
@@ -1269,7 +1279,9 @@ def get_search_history(student_id: int, limit: int = 20, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="Student not found")
 
     rows = (
-        db.query(models.SearchHistory)
+        db.query(models.SearchHistory, models.Topic, models.Subject)
+        .outerjoin(models.Topic, models.SearchHistory.topic_id == models.Topic.id)
+        .outerjoin(models.Subject, models.Topic.subject_id == models.Subject.id)
         .filter(models.SearchHistory.student_id == student_id)
         .order_by(models.SearchHistory.searched_at.desc())
         .limit(max(1, min(limit, 50)))
@@ -1277,12 +1289,7 @@ def get_search_history(student_id: int, limit: int = 20, db: Session = Depends(g
     )
 
     result = []
-    for row in rows:
-        topic = db.query(models.Topic).filter(models.Topic.id == row.topic_id).first()
-        subject = None
-        if topic:
-            subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
-
+    for row, topic, subject in rows:
         result.append({
             "id": row.id,
             "topic_id": row.topic_id,
@@ -1292,7 +1299,6 @@ def get_search_history(student_id: int, limit: int = 20, db: Session = Depends(g
         })
 
     return {"student_id": student_id, "total": len(result), "history": result}
-
 
 @app.delete("/search-history/{entry_id}")
 def delete_search_history_entry(entry_id: int, student_id: int, db: Session = Depends(get_db)):
@@ -1310,7 +1316,6 @@ def delete_search_history_entry(entry_id: int, student_id: int, db: Session = De
     db.commit()
     return {"message": "Deleted", "id": entry_id}
 
-
 @app.delete("/students/{student_id}/search-history")
 def clear_search_history(student_id: int, db: Session = Depends(get_db)):
     deleted = (
@@ -1321,13 +1326,10 @@ def clear_search_history(student_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "History cleared", "deleted": deleted}
 
-
 # ==================================================
-# FILE UPLOAD + LEARN FROM TEXT (AI Study Assistant)
+# FILE UPLOAD + LEARN FROM TEXT
 # ==================================================
 from services.file_service import extract_text
-from ai_tutor import get_client
-
 
 @app.post("/files/extract")
 async def extract_file_content(file: UploadFile = File(...)):
@@ -1356,7 +1358,6 @@ async def extract_file_content(file: UploadFile = File(...)):
         "char_count": len(result["text"]),
     }
 
-
 LEARN_SYSTEM_PROMPT = """You are a helpful AI Study Tutor.
 
 The user has uploaded a file and given you an instruction.
@@ -1365,15 +1366,14 @@ The user has uploaded a file and given you an instruction.
 CRITICAL: FOLLOW THE USER'S INSTRUCTION EXACTLY
 ═══════════════════════════════════════════════
 
-- If the user says "give me applications" → return ONLY the applications. Nothing else.
-- If the user says "summarize this" → return ONLY the summary. Nothing else.
+- If the user says "give me applications" → return ONLY the applications.
+- If the user says "summarize this" → return ONLY the summary.
 - If the user says "explain in simple terms" → return ONLY the simple explanation.
 - If the user says "give me 5 practice questions" → return ONLY 5 questions.
 - If the user says "write a detailed tutorial" → produce a full structured tutorial.
 - If the user says "answer this question" → return ONLY the answer.
 
 NEVER pad the response with sections the user did NOT ask for.
-NEVER force the full tutorial structure unless the user explicitly asked for it.
 Match the LENGTH of the response to what the instruction implies.
 
 When the user asks for a full tutorial, use this structure:
@@ -1393,13 +1393,11 @@ When the user asks for a full tutorial, use this structure:
 FORMATTING RULES (STRICT):
 1. NO HTML TAGS AT ALL. No <a name>, <div>, <span>, <br>, <p>.
 2. MATH — use ONLY: `inline` or $$display$$ on its own line.
-   NEVER use \\(...\\) or \\[...\\].
 3. Write "AI" correctly — never "Al".
 4. TABLES: max 6 rows × 4 columns.
 5. No duplicated sections.
 6. No HTML entities (&amp;amp;, &quot;, etc.).
 """
-
 
 def _clean_learn_output(text: str) -> str:
     if not text:
@@ -1426,12 +1424,10 @@ def _clean_learn_output(text: str) -> str:
     s = _re.sub(r"\n{4,}", "\n\n\n", s)
     return s.strip()
 
-
 class LearnFromTextRequest(BaseModel):
     text: str
     instruction: str
-    student_id: int | None = None
-
+    student_id: Optional[int] = None
 
 @app.post("/ai/learn-from-text")
 def learn_from_text(req: LearnFromTextRequest, db: Session = Depends(get_db)):
@@ -1487,9 +1483,8 @@ def learn_from_text(req: LearnFromTextRequest, db: Session = Depends(get_db)):
         "source_chars": len(text),
     }
 
-
 # ==================================================
-# FAST NOTIFICATIONS
+# NOTIFICATIONS + STRUGGLES
 # ==================================================
 @app.get("/notifications/{student_id}")
 def get_notifications(student_id: int, db: Session = Depends(get_db)):
@@ -1615,6 +1610,16 @@ def get_notifications(student_id: int, db: Session = Depends(get_db)):
         "notifications": notifications,
     }
 
+@app.get("/students/{student_id}/struggles")
+def get_student_struggles(student_id: int, db: Session = Depends(get_db)):
+    from services.struggle_service import detect_struggles
+
+    student = db.query(models.Student).filter(models.Student.id == student_id).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    struggles = detect_struggles(student_id, db)
+    return {"student_id": student_id, "struggles": struggles}
 
 # ==================================================
 # FLASHCARDS
@@ -1649,12 +1654,25 @@ JSON Schema:
 Topic: {topic}
 """
 
-
 class FlashcardGenerateRequest(BaseModel):
     topic_id: int
     num_cards: int = 10
     force: bool = False
 
+def get_student_language_by_topic(topic_id: int, db: Session) -> str:
+    try:
+        topic = db.query(models.Topic).filter(models.Topic.id == topic_id).first()
+        if not topic:
+            return "en"
+        subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
+        if not subject:
+            return "en"
+        student = db.query(models.Student).filter(models.Student.id == subject.student_id).first()
+        if student and student.preferred_language:
+            return student.preferred_language
+    except Exception:
+        pass
+    return "en"
 
 @app.post("/flashcards/generate")
 def generate_flashcards_endpoint(
@@ -1695,7 +1713,6 @@ def generate_flashcards_endpoint(
             db.commit()
 
     concepts = get_or_create_concepts(payload.topic_id, db)
-
     if not concepts:
         raise HTTPException(status_code=400, detail="No concepts available for this topic")
 
@@ -1752,13 +1769,11 @@ def generate_flashcards_endpoint(
         back = (c.get("back") or "").strip()
         if not front or not back:
             continue
-        cards.append(
-            {
-                "front": front,
-                "back": back,
-                "concept_name": (c.get("concept_name") or "").strip(),
-            }
-        )
+        cards.append({
+            "front": front,
+            "back": back,
+            "concept_name": (c.get("concept_name") or "").strip(),
+        })
 
     if not cards:
         raise HTTPException(status_code=500, detail="LLM produced no valid flashcards")
@@ -1779,34 +1794,15 @@ def generate_flashcards_endpoint(
         "cached": False,
     }
 
-
-def get_student_language_by_topic(topic_id: int, db: Session) -> str:
-    try:
-        topic = db.query(models.Topic).filter(models.Topic.id == topic_id).first()
-        if not topic:
-            return "en"
-        subject = db.query(models.Subject).filter(models.Subject.id == topic.subject_id).first()
-        if not subject:
-            return "en"
-        student = db.query(models.Student).filter(models.Student.id == subject.student_id).first()
-        if student and student.preferred_language:
-            return student.preferred_language
-    except Exception:
-        pass
-    return "en"
-
-
 # ==================================================
 # NOVAAI CHAT — Models
 # ==================================================
 from services import chat_service
 
-
 class ConversationCreate(BaseModel):
     student_id: int
     title: str = "New chat"
     model: str = chat_service.DEFAULT_MODEL
-
 
 class ConversationUpdate(BaseModel):
     title: Optional[str] = None
@@ -1814,23 +1810,19 @@ class ConversationUpdate(BaseModel):
     pinned: Optional[bool] = None
     archived: Optional[bool] = None
 
-
 class ChatSendRequest(BaseModel):
     student_id: int
     content: str
     model: Optional[str] = None
     web_search: bool = False
 
-
 class MessageFeedback(BaseModel):
     student_id: int
     feedback: str
 
-
 @app.get("/chat/models")
 def chat_models():
     return {"models": chat_service.list_models(), "default": chat_service.DEFAULT_MODEL}
-
 
 @app.get("/chat/conversations")
 def list_conversations(student_id: int, q: str = "", db: Session = Depends(get_db)):
@@ -1841,7 +1833,6 @@ def list_conversations(student_id: int, q: str = "", db: Session = Depends(get_d
 
     if q.strip():
         like = f"%{q.strip()}%"
-        from sqlalchemy import or_
         query = query.outerjoin(
             models.ChatMessage,
             models.ChatMessage.conversation_id == models.Conversation.id,
@@ -1881,7 +1872,6 @@ def list_conversations(student_id: int, q: str = "", db: Session = Depends(get_d
 
     return {"conversations": result}
 
-
 @app.post("/chat/conversations")
 def create_conversation(payload: ConversationCreate, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == payload.student_id).first()
@@ -1903,7 +1893,6 @@ def create_conversation(payload: ConversationCreate, db: Session = Depends(get_d
         "model": conv.model,
         "created_at": conv.created_at.isoformat() if conv.created_at else None,
     }
-
 
 @app.get("/chat/conversations/{conv_id}")
 def get_conversation(conv_id: int, student_id: int, db: Session = Depends(get_db)):
@@ -1940,7 +1929,6 @@ def get_conversation(conv_id: int, student_id: int, db: Session = Depends(get_db
         ],
     }
 
-
 @app.patch("/chat/conversations/{conv_id}")
 def update_conversation(
     conv_id: int,
@@ -1967,7 +1955,6 @@ def update_conversation(
     db.commit()
     return {"ok": True}
 
-
 @app.delete("/chat/conversations/{conv_id}")
 def delete_conversation(conv_id: int, student_id: int, db: Session = Depends(get_db)):
     conv = db.query(models.Conversation).filter(
@@ -1980,7 +1967,6 @@ def delete_conversation(conv_id: int, student_id: int, db: Session = Depends(get
     db.delete(conv)
     db.commit()
     return {"ok": True}
-
 
 @app.patch("/chat/messages/{msg_id}/feedback")
 def message_feedback(
@@ -2006,7 +1992,6 @@ def message_feedback(
     db.commit()
     return {"ok": True, "feedback": msg.feedback}
 
-
 @app.delete("/chat/messages/{msg_id}")
 def delete_message(msg_id: int, student_id: int, db: Session = Depends(get_db)):
     msg = db.query(models.ChatMessage).filter(models.ChatMessage.id == msg_id).first()
@@ -2024,9 +2009,8 @@ def delete_message(msg_id: int, student_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"ok": True}
 
-
 # ==================================================
-# RAG — ATTACHMENTS  (also: learner_context import for personalization)
+# RAG — ATTACHMENTS
 # ==================================================
 from services.rag_service import (
     store_document_chunks,
@@ -2038,7 +2022,6 @@ from services.web_search_service import (
     build_web_context,
 )
 from services.learner_context import build_learner_context
-
 
 @app.post("/chat/conversations/{conv_id}/attachments")
 async def upload_attachment(
@@ -2114,7 +2097,6 @@ async def upload_attachment(
         "created_at": attachment.created_at.isoformat() if attachment.created_at else None,
     }
 
-
 @app.get("/chat/conversations/{conv_id}/attachments")
 def list_attachments(conv_id: int, student_id: int, db: Session = Depends(get_db)):
     conv = db.query(models.Conversation).filter(
@@ -2145,7 +2127,6 @@ def list_attachments(conv_id: int, student_id: int, db: Session = Depends(get_db
         ]
     }
 
-
 @app.delete("/chat/attachments/{attachment_id}")
 def delete_attachment(
     attachment_id: int, student_id: int, db: Session = Depends(get_db)
@@ -2169,9 +2150,8 @@ def delete_attachment(
     db.commit()
     return {"ok": True}
 
-
 # ==================================================
-# DEBUG — inspect extraction + chunking
+# DEBUG
 # ==================================================
 @app.get("/chat/attachments/{attachment_id}/debug")
 def debug_attachment(attachment_id: int, db: Session = Depends(get_db)):
@@ -2180,7 +2160,6 @@ def debug_attachment(attachment_id: int, db: Session = Depends(get_db)):
         .filter(models.ChatAttachment.id == attachment_id)
         .first()
     )
-    
     if not att:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
@@ -2210,11 +2189,8 @@ def debug_attachment(attachment_id: int, db: Session = Depends(get_db)):
         ],
     }
 
-
 @app.get("/chat/debug/learner-context/{student_id}")
 def debug_learner_context(student_id: int, db: Session = Depends(get_db)):
-    """TEMPORARY — inspect the exact learner context sent to the LLM."""
-    from services.learner_context import build_learner_context
     context = build_learner_context(db, student_id)
     return {
         "student_id": student_id,
@@ -2222,25 +2198,19 @@ def debug_learner_context(student_id: int, db: Session = Depends(get_db)):
         "context": context,
     }
 
-
 # ==================================================
 # NOVAAI CHAT — Streaming
 # ==================================================
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
-
-# ---- HTML cleanup for streamed LLM output ----
-# Replace <br> with a space (not \n) so Markdown tables stay intact.
 _BR_RE = _re.compile(r"<br\s*/?>", _re.IGNORECASE)
 _HTML_TAG_RE = _re.compile(
     r"</?(?:div|span|p|a|b|i|u|strong|em|ul|ol|li|table|tr|td|th|h[1-6]|font|section|article|header|footer|nav|main|aside)\b[^>]*>",
     _re.IGNORECASE,
 )
 
-
 def _strip_html_streaming(text: str) -> str:
-    """Remove HTML the LLM sometimes emits — <br> → space, other tags removed."""
     if not text:
         return text
     text = _BR_RE.sub(" ", text)
@@ -2253,17 +2223,12 @@ def _strip_html_streaming(text: str) -> str:
     text = text.replace("&#39;", "'")
     return text
 
-
 @app.post("/chat/conversations/{conv_id}/stream")
 def stream_chat(
     conv_id: int,
     payload: ChatSendRequest,
     db: Session = Depends(get_db),
 ):
-    """
-    Sends a message and streams the AI response back via SSE.
-    Supports file RAG context + optional live web search + learner personalization.
-    """
     conv = db.query(models.Conversation).filter(
         models.Conversation.id == conv_id,
         models.Conversation.student_id == payload.student_id,
@@ -2277,7 +2242,6 @@ def stream_chat(
 
     model_id = payload.model or conv.model or chat_service.DEFAULT_MODEL
 
-    # ---------- Learner context (personalization) ----------
     learner_context = ""
     try:
         learner_context = build_learner_context(db, payload.student_id)
@@ -2285,7 +2249,6 @@ def stream_chat(
         print(f"[stream_chat] learner context failed: {e}")
         learner_context = ""
 
-    # ---------- Web search (optional) ----------
     web_results = []
     web_context = ""
     if getattr(payload, "web_search", False):
@@ -2295,16 +2258,13 @@ def stream_chat(
         except Exception as e:
             print(f"[stream_chat] web search failed: {e}")
 
-    # ---------- RAG retrieval ----------
     chunks = retrieve_relevant_chunks(conv_id, user_text, top_k=4, db=db)
     file_context = build_context_block(chunks)
 
-    # Combine: web first (fresh info), then files
     context_block = "\n\n".join(
         part for part in (web_context, file_context) if part
     )
 
-    # ---------- Save user message ----------
     user_msg = models.ChatMessage(
         conversation_id=conv.id,
         role="user",
@@ -2329,7 +2289,6 @@ def stream_chat(
     db.commit()
     db.refresh(user_msg)
 
-    # ---------- Fetch history ----------
     history = (
         db.query(models.ChatMessage)
         .filter(
@@ -2348,7 +2307,6 @@ def stream_chat(
         learner_context=learner_context,
     )
 
-    # ---------- Stream ----------
     def event_gen():
         full_response = ""
         assistant_msg_id = None
@@ -2456,7 +2414,6 @@ def stream_chat(
         },
     )
 
-
 # ==================================================
 # PHASE 2 — ONBOARDING + DIAGNOSTIC QUIZ
 # ==================================================
@@ -2466,24 +2423,20 @@ from services.onboarding_service import (
     submit_diagnostic,
 )
 
-
 class OnboardingStartRequest(BaseModel):
     student_id: int
     learning_goal: str
     daily_time_minutes: int = 30
     current_level: str = "beginner"
 
-
 class DiagnosticGenerateRequest(BaseModel):
     student_id: int
-
 
 class DiagnosticSubmitRequest(BaseModel):
     student_id: int
     topic_id: int
     answers: Dict[str, Optional[str]]
     session_id: Optional[str] = None
-
 
 @app.post("/onboarding/start")
 def onboarding_start(payload: OnboardingStartRequest, db: Session = Depends(get_db)):
@@ -2498,7 +2451,6 @@ def onboarding_start(payload: OnboardingStartRequest, db: Session = Depends(get_
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.post("/onboarding/diagnostic/generate")
 def onboarding_generate(
     payload: DiagnosticGenerateRequest, db: Session = Depends(get_db)
@@ -2507,7 +2459,6 @@ def onboarding_generate(
         return generate_diagnostic(student_id=payload.student_id, db=db)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
 
 @app.post("/onboarding/diagnostic/submit")
 def onboarding_submit(
@@ -2524,7 +2475,6 @@ def onboarding_submit(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-
 @app.get("/onboarding/status/{student_id}")
 def onboarding_status(student_id: int, db: Session = Depends(get_db)):
     student = db.query(models.Student).filter(models.Student.id == student_id).first()
@@ -2537,3 +2487,20 @@ def onboarding_status(student_id: int, db: Session = Depends(get_db)):
         "daily_time_minutes": student.daily_time_minutes or 30,
         "current_level": student.current_level or "",
     }
+
+# ==================================================
+# PHASE 5 — INTELLIGENT ROADMAPS
+# ==================================================
+from services.roadmap_service import generate_roadmap_for_topic
+
+class TopicAnalyzeRequest(BaseModel):
+    student_id: Optional[int] = None
+
+@app.post("/topics/{topic_id}/analyze")
+def analyze_topic(topic_id: int, payload: TopicAnalyzeRequest = None, db: Session = Depends(get_db)):
+    try:
+        student_id = payload.student_id if payload else None
+        result = generate_roadmap_for_topic(topic_id, student_id, db)
+        return {"topic_id": topic_id, "analysis": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

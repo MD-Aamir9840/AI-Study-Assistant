@@ -5,6 +5,8 @@ import {
   getRecommendationsList,
   searchTopic,
   getTopicFull,
+  getStudentStruggles,
+  getDailyStudyPlan,
 } from "../api/client";
 import { useAuth } from "../context/AuthContext";
 import { useCachedFetch } from "../hooks/useCachedFetch";
@@ -15,12 +17,25 @@ import {
   AlertTriangle,
   Sparkles,
   RefreshCw,
+  Brain,
+  MessageSquare,
+  BookOpen,
+  Play,
+  Clock,
 } from "lucide-react";
 import "./Dashboard.css";
 
 export default function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
+
+  // Dynamic Greeting based on time of day
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return "Good Morning";
+    if (hour < 18) return "Good Afternoon";
+    return "Good Evening";
+  };
 
   // ---------- Cached fetches (instant load + manual refresh) ----------
   const {
@@ -47,10 +62,35 @@ export default function Dashboard() {
     }
   );
 
+  const { data: strugglesData } = useCachedFetch(
+    user?.student_id ? `dash_struggles_${user.student_id}` : "dash_struggles_none",
+    async () => {
+      if (!user?.student_id) return [];
+      const res = await getStudentStruggles(user.student_id);
+      return res.data.struggles || [];
+    }
+  );
+
+  // AI STUDY PLANNER
+  const { data: dailyPlanData, loading: planLoading } = useCachedFetch(
+    user?.student_id ? `dash_daily_plan_${user.student_id}` : "dash_plan_none",
+    async () => {
+      if (!user?.student_id) return { plan: [] };
+      const res = await getDailyStudyPlan(user.student_id);
+      return res.data;
+    }
+  );
+
   const recs = recsData || [];
+  const struggles = strugglesData || [];
+  const topStruggle = struggles.length > 0 ? struggles[0] : null;
+  const dailyPlan = dailyPlanData?.plan || [];
 
   const refreshAll = () => {
     refresh();
+    if (user?.student_id) {
+      localStorage.removeItem(`dash_daily_plan_${user.student_id}`);
+    }
   };
 
   const prefetchRec = (rec) => {
@@ -69,6 +109,12 @@ export default function Dashboard() {
     }
   };
 
+  const handleAskAITutor = () => {
+    if (!topStruggle) return;
+    const prompt = `I'm struggling with "${topStruggle.concept_name}". My current score is ${topStruggle.score}%. Can you explain it to me in a simpler way with more examples?`;
+    navigate(`/ai-tutor?prompt=${encodeURIComponent(prompt)}`);
+  };
+
   const data = analyticsData;
 
   return (
@@ -76,7 +122,7 @@ export default function Dashboard() {
       <div className="dash-greeting-row">
         <div>
           <h1 className="dash-title">
-            Good Morning, {user?.name || "Student"} 👋
+            {getGreeting()}, <span className="dash-name">{user?.name || "Student"}</span> 👋
           </h1>
           <p className="dash-subtitle">Keep going. You're doing great.</p>
         </div>
@@ -85,20 +131,79 @@ export default function Dashboard() {
           type="button"
           className="dash-refresh-btn"
           onClick={refreshAll}
-          disabled={refreshing}
+          disabled={refreshing || planLoading}
           title="Refresh dashboard"
         >
-          <RefreshCw size={15} className={refreshing ? "spin" : ""} />
-          {refreshing ? "Refreshing..." : "Refresh"}
+          <RefreshCw size={16} className={refreshing || planLoading ? "spin" : ""} />
+          <span>{refreshing || planLoading ? "Refreshing..." : "Refresh"}</span>
         </button>
       </div>
 
       {error && <div className="dash-error">{error}</div>}
 
+      {/* 1. INTELLIGENT STRUGGLE ALERT (MOVED TO TOP) */}
+      {topStruggle && (
+        <div className="struggle-alert-card">
+          <div className="struggle-icon">
+            <Brain size={24} />
+          </div>
+          <div className="struggle-content">
+            <h3>AI Tutor noticed you're struggling</h3>
+            <p>
+              You scored <strong>{topStruggle.score}%</strong> on{" "}
+              <strong>{topStruggle.concept_name}</strong>. {topStruggle.reason}
+            </p>
+            <div className="struggle-actions">
+              <button className="struggle-btn-primary" onClick={handleAskAITutor}>
+                <MessageSquare size={14} /> Ask AI Tutor
+              </button>
+              <button
+                className="struggle-btn-secondary"
+                onClick={() => navigate(`/topic/${topStruggle.topic_id}`)}
+              >
+                Review Topic
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. AI DAILY STUDY PLAN */}
+      {dailyPlan.length > 0 && (
+        <div className="panel daily-plan-panel">
+          <div className="panel-header">
+            <h2 className="panel-title">📅 Today's Study Plan</h2>
+            <span className="panel-subtitle">Customized for your {user?.daily_time_minutes || 30} min limit</span>
+          </div>
+          <div className="dash-daily-plan">
+            {dailyPlan.map((task, idx) => (
+              <div key={idx} className="dp-task">
+                <div className="dp-task-icon">
+                  {task.activity === "Read" && <BookOpen size={18} />}
+                  {task.activity === "Quiz" && <Play size={18} />}
+                  {task.activity === "Practice" && <Target size={18} />}
+                </div>
+                <div className="dp-task-info">
+                  <h4>{task.activity}: {task.concept_name}</h4>
+                  <p><Clock size={12} /> {task.duration_minutes} mins • {task.reason}</p>
+                </div>
+                <button 
+                  className="btn-secondary dp-btn"
+                  onClick={() => navigate(task.activity === "Quiz" ? `/quiz?topic=${task.topic_id}` : `/topic/${task.topic_id}`)}
+                >
+                  Start
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {loading && !data && <p className="dash-muted">Loading dashboard...</p>}
 
       {data && (
         <>
+          {/* 3. STATS */}
           <div className="dash-stats">
             <div className="stat-card">
               <div className="stat-top">
@@ -193,6 +298,7 @@ export default function Dashboard() {
             </div>
           </div>
 
+          {/* 4. RECOMMENDATIONS */}
           {recs.length > 0 && (
             <div className="panel">
               <div className="panel-header">
@@ -232,6 +338,7 @@ export default function Dashboard() {
             </div>
           )}
 
+          {/* 5. PERFORMANCE */}
           <div className="panel">
             <div className="panel-header">
               <h2 className="panel-title">Your Performance</h2>
@@ -260,6 +367,7 @@ export default function Dashboard() {
             )}
           </div>
 
+          {/* 6. AI SUMMARY */}
           <div className="ai-reco-card">
             <div className="ai-reco-icon">
               <Sparkles size={20} />

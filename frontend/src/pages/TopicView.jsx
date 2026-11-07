@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { getTopicFull, regenerateContent } from "../api/client";
+import { getTopicFull, regenerateContent, analyzeTopic } from "../api/client";
+import { useAuth } from "../context/AuthContext";
 import Markdown from "../components/Markdown";
 import MermaidDiagram from "../components/MermaidDiagram";
 import ConceptModal from "../components/ConceptModal";
@@ -25,12 +26,16 @@ import {
   Check,
   Download,
   Zap,
+  Map,
+  X,
+  Info,
 } from "lucide-react";
 import "./TopicView.css";
 
 export default function TopicView() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const cacheKey = id ? `topic_full_v2_${id}` : null;
 
@@ -54,7 +59,28 @@ export default function TopicView() {
   const [copiedAll, setCopiedAll] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  // Phase 5 — Intelligent Roadmap State
+  const [analysis, setAnalysis] = useState(null);
+  const [showRoadmapBanner, setShowRoadmapBanner] = useState(true);
+
   const contentRef = useRef(null);
+
+  // Fetch roadmap analysis in the background when topic changes
+  useEffect(() => {
+    if (!id) return;
+    setShowRoadmapBanner(true);
+    
+    analyzeTopic(id, user?.student_id)
+      .then((res) => {
+        const result = res.data.analysis;
+        if (result && result.requires_roadmap) {
+          setAnalysis(result);
+        } else {
+          setAnalysis(null);
+        }
+      })
+      .catch(() => setAnalysis(null));
+  }, [id, user?.student_id]);
 
   const handleRegenerate = async () => {
     if (
@@ -161,6 +187,50 @@ export default function TopicView() {
 
   return (
     <div className="topic-view" ref={contentRef}>
+      
+      {/* Phase 5 — Minimized Roadmap Button (Section 5 of Vision) */}
+      {analysis && !showRoadmapBanner && (
+        <div className="trb-minimized" data-html2canvas-ignore="true">
+          <button 
+            className="trb-minimized-btn" 
+            onClick={() => setShowRoadmapBanner(true)}
+          >
+            <Info size={16} />
+            Prerequisite suggestion for {topic.name}
+          </button>
+        </div>
+      )}
+
+      {/* Phase 5 — Intelligent Roadmap Banner */}
+      {analysis && showRoadmapBanner && (
+        <div className="topic-roadmap-banner" data-html2canvas-ignore="true">
+          <div className="trb-icon">
+            <Map size={20} />
+          </div>
+          <div className="trb-content">
+            <h3>We noticed this is a broad subject.</h3>
+            <p>
+              Before starting <strong>{topic.name}</strong>, we recommend checking out the prerequisites to build a stronger foundation.
+            </p>
+          </div>
+          <div className="trb-actions">
+            <button
+              className="trb-btn-primary"
+              onClick={() => navigate(`/roadmap/${id}`)}
+            >
+              View Full Roadmap
+            </button>
+            <button
+              className="trb-btn-close"
+              onClick={() => setShowRoadmapBanner(false)}
+              title="Minimize"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="topic-header" data-html2canvas-ignore="true">
         <button className="topic-back" onClick={handleBack} type="button">
           <ArrowLeft size={16} /> Back
@@ -184,17 +254,13 @@ export default function TopicView() {
           </div>
 
           <div className="topic-actions" data-html2canvas-ignore="true">
-            {/* ✅ NEW: Refresh button */}
             <button
               className="btn-secondary"
               onClick={handleRefresh}
               disabled={refreshing}
               title="Refresh content"
             >
-              <RefreshCw
-                size={14}
-                className={refreshing ? "spin" : ""}
-              />
+              <RefreshCw size={14} className={refreshing ? "spin" : ""} />
               {refreshing ? "Refreshing..." : "Refresh"}
             </button>
 
@@ -248,10 +314,7 @@ export default function TopicView() {
       </div>
 
       {concepts.length > 0 && (
-        <section
-          className="topic-concepts-strip"
-          data-html2canvas-ignore="true"
-        >
+        <section className="topic-concepts-strip" data-html2canvas-ignore="true">
           <div className="strip-title">
             <Layers size={16} />
             Concepts in this topic

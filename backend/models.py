@@ -464,3 +464,14 @@ class DocumentChunk(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     attachment = relationship("ChatAttachment", back_populates="chunks")
+# ==================================================
+# PHASE 5 — INTELLIGENT ROADMAPS
+# ==================================================
+class TopicRoadmap(Base):
+    __tablename__ = "topic_roadmaps"
+    id = Column(Integer, primary_key=True, index=True)
+    topic_id = Column(Integer, ForeignKey("topics.id"), nullable=False, unique=True, index=True)
+    roadmap_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    topic = relationship("Topic")

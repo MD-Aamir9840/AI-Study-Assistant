@@ -1,5 +1,7 @@
 """
-Generates GFG-style content + concepts with broad-field awareness and language support.
+Dynamic Content Generator.
+The AI acts as a curriculum strategist, deciding how much content to generate
+based on the complexity of the topic.
 """
 
 import json
@@ -23,37 +25,6 @@ def _get_topic_lock(topic_id: int) -> threading.Lock:
         if topic_id not in _topic_locks:
             _topic_locks[topic_id] = threading.Lock()
         return _topic_locks[topic_id]
-
-
-BROAD_FIELDS = {
-    "ai", "artificial intelligence",
-    "ml", "machine learning",
-    "dl", "deep learning",
-    "data science",
-    "data analytics", "data analysis",
-    "web development", "web dev",
-    "python", "java", "javascript", "c", "c++", "c#", "go", "rust",
-    "dsa", "data structures", "algorithms",
-    "cloud", "cloud computing", "aws", "azure", "gcp",
-    "cybersecurity", "cyber security", "security",
-    "devops",
-    "blockchain",
-    "sql", "databases", "dbms",
-    "operating systems", "os", "networking",
-    "nlp", "computer vision",
-    "iot", "internet of things",
-    "ux", "ui", "ux design", "ui design",
-}
-
-
-def _is_broad_field(topic_name: str) -> bool:
-    key = topic_name.strip().lower()
-    if key in BROAD_FIELDS:
-        return True
-    words = key.split()
-    if len(words) <= 2 and any(key in bf or bf in key for bf in BROAD_FIELDS):
-        return True
-    return False
 
 
 def _repair_latex(text: str) -> str:
@@ -104,144 +75,56 @@ def _normalize_text(value):
 
 
 CONTENT_SYSTEM_PROMPT = (
-    "You are a warm, patient teacher writing beginner-friendly educational articles "
-    "in the style of GeeksforGeeks. Plain prose, real-world examples, no jargon without explanation. "
-    "You NEVER invent content that doesn't naturally belong to a topic, "
-    "and you NEVER omit well-known subtypes. "
+    "You are an expert AI Curriculum Designer and Teacher. "
+    "Your goal is to provide exactly the right amount of educational content for a given topic. "
+    "Do not pad your response with fluff. Do not invent unrelated information. "
     "Return ONLY valid JSON. No markdown fences, no prose outside JSON.\n\n"
-    "CRITICAL LaTeX RULES for JSON output:\n"
+    "CRITICAL LaTeX RULES:\n"
     "- When writing LaTeX in JSON strings, ALWAYS double-escape backslashes.\n"
-    "- Write double-backslash text, times, theta, alpha, beta, frac, sqrt — never single.\n"
-    "- A single backslash becomes a tab or newline character in JSON and breaks the output.\n"
-    "- Avoid complex LaTeX entirely when you can express it in plain words.\n"
-    "- Prefer inline code like `y = mx + b` over complex math syntax."
+    "- Avoid complex LaTeX entirely. Prefer inline code like `y = mx + b`."
 )
 
 
-CONTENT_PROMPT_TEMPLATE = """Write a beginner-friendly article about "{topic}" ({subject}, {difficulty}).
+DYNAMIC_PROMPT_TEMPLATE = """Analyze the topic "{topic}" (Subject: "{subject}", Difficulty: {difficulty}).
 
-STYLE (match GeeksforGeeks):
-- Plain prose paragraphs
-- Warm, patient tone
-- Start simple, then go deeper
-- Use REAL newline characters, not backslash-n escapes
+STEP 1: Classify the topic into ONE of these categories:
+1. "focused_concept" (e.g., Overfitting, Python List comprehension, Hash Collision)
+2. "standard_topic" (e.g., Binary Search, Support Vector Machine, SQL Joins)
+3. "broad_field" (e.g., Data Structures, Machine Learning, Web Development)
 
-DEFINITION STYLE (intro_md):
-Paragraph 1: One clear sentence defining the topic. Then "In simple words, ..." then why it matters with 2-3 real-world examples.
-Paragraph 2 (optional): Deeper definition.
+STEP 2: Generate the JSON based on the classification.
 
-MATH — KEEP IT SIMPLE:
-- Simple formulas: use backticks like `y = mx + b`
-- Real formulas on their own line: use $$...$$
-- In JSON, write backslashes DOUBLED.
-- Prefer words over symbols.
+═══════════════════════════════════════════════
+GENERATION RULES
+═══════════════════════════════════════════════
+- If "focused_concept":
+  Keep it extremely concise. Intro (1 paragraph), Real-world example (1 paragraph).
+  Only 2-3 bullet points for "why needed", "applications", "challenges".
+  `types_md` should be an empty string "".
+  Total word count: 200-300 words.
 
-BULLET LISTS — CRITICAL FORMATTING:
-For challenges_md, best_practices_md, applications_md, related_topics_md:
-- Write each item on its OWN LINE starting with "- "
-- Never put two items on the same line
-- Format: - **Name:** one-sentence explanation
+- If "standard_topic":
+  Standard depth. Intro (1-2 paragraphs), Real-world example (1 paragraph).
+  3-4 bullet points per section.
+  `types_md` should only list well-known subtypes (e.g., SVM -> SVC, SVR).
+  Total word count: 400-600 words.
 
-TYPES SECTION:
-If the topic has WELL-KNOWN subtypes, list them using:
-### Type 1: Type Name
-description
+- If "broad_field":
+  Comprehensive roadmap. Intro (2-3 paragraphs explaining the whole field).
+  4-6 bullet points per section.
+  `types_md` must list the major sub-fields (e.g., ML -> Supervised, Unsupervised, RL).
+  `diagram_mermaid` must be a clear learning roadmap flowchart.
+  Total word count: 800-1200 words.
 
-If NO, return types_md as EMPTY STRING. Never write "No types available."
+FORMATTING RULES:
+- Bullet lists: Each item on its OWN line starting with "- ".
+- Use Markdown for headers in sections (e.g., ### Step 1: Name).
+- Use real newline characters (\\n), not string escapes.
+- NO HTML tags.
 
-Reference of topics with types:
-- SVM to SVC, SVR, One-Class SVM, Linear, Kernel
-- Neural Networks to CNN, RNN, Transformer, Feedforward
-- Machine Learning to Supervised, Unsupervised, Reinforcement
-- Transfer Learning to Feature Extraction, Fine-tuning, Domain Adaptation
-
-SECTIONS:
-1. intro_md — 2 paragraphs.
-2. real_world_example_md — 2 paragraphs.
-3. why_needed_md — use ### 1. Reason Name subsections.
-4. how_it_works_md — use ### Step 1: Name subsections with a SPACE after colon.
-5. types_md — May be empty.
-6. applications_md — bullet list (5-6 items, one per line).
-7. challenges_md — bullet list (4-5 items, one per line).
-8. best_practices_md — bullet list (4-5 items, one per line).
-9. related_topics_md — bullet list (4-5 items, one per line).
-10. diagram_mermaid — Mermaid code.
-11. diagram_caption — one line.
-
-TONE: 900-1300 words.
-
-Return ONLY this JSON:
+Return ONLY this JSON structure:
 {{
-  "title": "string",
-  "tagline": "one-line subtitle",
-  "intro_md": "string",
-  "real_world_example_md": "string",
-  "why_needed_md": "string",
-  "how_it_works_md": "string",
-  "types_md": "string",
-  "applications_md": "string",
-  "challenges_md": "string",
-  "best_practices_md": "string",
-  "related_topics_md": "string",
-  "diagram_mermaid": "string",
-  "diagram_caption": "string"
-}}
-
-Topic: {topic}
-"""
-
-
-BROAD_FIELD_PROMPT_TEMPLATE = """Write a comprehensive, beginner-friendly SURVEY article about the field "{topic}".
-
-This is a BROAD FIELD, not a narrow technique. The reader is a complete beginner.
-The article should act as a roadmap.
-
-STYLE:
-- Warm, welcoming, patient tone
-- Plain prose paragraphs
-- Assume the reader knows nothing
-- Start with why this field exists
-
-Because "{topic}" is a FIELD, include:
-1. Clear motivating intro
-2. MAJOR SUB-FIELDS / BRANCHES (4-8 areas)
-3. Simple learning roadmap
-4. Real-world examples from different areas
-5. Tools/technologies used
-6. Career paths / roles
-7. Common beginner misconceptions
-
-DEFINITION STYLE (intro_md):
-Paragraph 1: Clear 1-sentence definition. Then "In simple words, ..."
-Paragraph 2: Brief history / why it exists.
-Paragraph 3: 2-3 bullet examples.
-
-MATH — KEEP IT SIMPLE:
-- Simple formulas: use backticks
-- Real formulas on their own line: use $$...$$
-- Prefer words over symbols.
-
-BULLET LISTS — CRITICAL:
-- Each item on its OWN line starting with "- "
-- Format: - **Name:** one-sentence explanation
-
-SECTIONS:
-1. intro_md — 3 paragraphs
-2. real_world_example_md — 2 paragraphs
-3. why_needed_md — ### 1. Reason / ### 2. Reason
-4. how_it_works_md — ### Stage 1: Name / ### Stage 2: Name
-5. types_md — ### Sub-field 1: Name / ### Sub-field 2: Name
-6. applications_md — bullet list 6-8 items
-7. challenges_md — bullet list 4-6 items
-8. best_practices_md — bullet list 5-6 items
-9. related_topics_md — bullet list 4-6 ADJACENT fields
-10. diagram_mermaid — Mermaid flowchart (learning roadmap)
-11. diagram_caption — one line
-
-TONE: 1200-1600 words.
-
-Return ONLY this JSON:
-{{
+  "topic_classification": "focused_concept" | "standard_topic" | "broad_field",
   "title": "string",
   "tagline": "one-line subtitle",
   "intro_md": "string",
@@ -262,18 +145,14 @@ Topic: {topic}
 
 
 def _try_generate(model: str, topic: str, subject: str, difficulty: str, language: str = "en") -> dict:
-    template = (
-        BROAD_FIELD_PROMPT_TEMPLATE
-        if _is_broad_field(topic)
-        else CONTENT_PROMPT_TEMPLATE
-    )
-
-    prompt = template.format(topic=topic, subject=subject, difficulty=difficulty)
+    prompt = DYNAMIC_PROMPT_TEMPLATE.format(topic=topic, subject=subject, difficulty=difficulty)
 
     lang_note = language_instruction(language)
     if lang_note:
         prompt = prompt + lang_note
 
+    # We allow max_tokens=4000 so "broad_field" has room to breathe.
+    # Groq will stop generating early for "focused_concept" because the prompt tells it to.
     content = call_llm_json(
         prompt,
         system=CONTENT_SYSTEM_PROMPT,
@@ -281,6 +160,7 @@ def _try_generate(model: str, topic: str, subject: str, difficulty: str, languag
         max_tokens=4000,
         model=model,
     )
+    
     if not isinstance(content, dict) or "title" not in content:
         raise RuntimeError("LLM returned malformed content")
 
@@ -298,6 +178,8 @@ def _try_generate(model: str, topic: str, subject: str, difficulty: str, languag
 
 def generate_content(topic_name: str, subject_name: str, difficulty: str, language: str = "en") -> dict:
     try:
+        # Use the FAST_MODEL (20B) first for high speed. 
+        # The 20B model is more than capable of following these structured rules.
         return _try_generate(FAST_MODEL, topic_name, subject_name, difficulty, language)
     except Exception as e:
         print(f"[content_service] Fast model failed ({e}), retrying with fallback...")
@@ -332,7 +214,7 @@ def get_or_create_content(topic_id: int, db: Session) -> dict:
         topic_id=topic_id,
         content_json=json.dumps(content),
         sources="[]",
-        model_version=f"{FAST_MODEL} (with {DEFAULT_MODEL} fallback)",
+        model_version=f"{FAST_MODEL} (Dynamic Content Strategist)",
     )
     db.add(record)
 
